@@ -1,0 +1,28 @@
+# Proxy workflow for CI_Toolkit — copy to .github/workflows/ci-project-compliance.yml
+# in your org's proxy repo (e.g. BHoM/CI_Proxy).
+#
+# Required by rulesets: alpha, beta
+#
+# The org ruleset for each applicable maturity tier should require:
+#   <proxy-repo>/.github/workflows/ci-project-compliance.yml@main
+#
+# The paths: filter mirrors CI_Toolkit's own ci-project-compliance.yml. It must be
+# duplicated here because GitHub does not propagate paths filters from a called reusable
+# workflow when evaluating ruleset required-workflow checks.
+
+name: Project Compliance
+
+on:
+  pull_request:
+    paths:
+      - '**/*.cs'
+      - '**/*.csproj'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  project-compliance:
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-project-compliance.yml@main
+    secrets: inherit
