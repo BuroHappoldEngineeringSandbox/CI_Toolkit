@@ -4,7 +4,7 @@
 # Required by rulesets: prototype, alpha, beta
 #
 # The org ruleset for each applicable maturity tier should require:
-#   <proxy-repo>/.github/workflows/ci-format.yml@main
+#   <proxy-repo>/.github/workflows/ci-format.yml@develop
 #
 # The paths: filter mirrors CI_Toolkit's own ci-format.yml. It must be duplicated here
 # because GitHub does not propagate paths filters from a called reusable workflow when
@@ -26,5 +26,5 @@ concurrency:
 
 jobs:
   format:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-format.yml@main
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-format.yml@develop
     secrets: inherit

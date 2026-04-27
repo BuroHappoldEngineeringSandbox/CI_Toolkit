@@ -4,7 +4,7 @@
 # Required by rulesets: alpha, beta
 #
 # The org ruleset for each applicable maturity tier should require:
-#   <proxy-repo>/.github/workflows/ci-build.yml@main
+#   <proxy-repo>/.github/workflows/ci-build.yml@develop
 #
 # The paths: filter mirrors CI_Toolkit's own ci-build.yml. It must be duplicated here
 # because GitHub does not propagate paths filters from a called reusable workflow when
@@ -28,5 +28,5 @@ concurrency:
 
 jobs:
   build:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-build.yml@main
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-build.yml@develop
     secrets: inherit

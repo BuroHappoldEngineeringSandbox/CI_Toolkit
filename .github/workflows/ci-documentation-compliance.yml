@@ -4,7 +4,7 @@
 # Required by rulesets: beta
 #
 # The org ruleset for the beta maturity tier should require:
-#   <proxy-repo>/.github/workflows/ci-documentation-compliance.yml@main
+#   <proxy-repo>/.github/workflows/ci-documentation-compliance.yml@develop
 #
 # The paths: filter mirrors CI_Toolkit's own ci-documentation-compliance.yml. It must be
 # duplicated here because GitHub does not propagate paths filters from a called reusable
@@ -24,5 +24,5 @@ concurrency:
 
 jobs:
   documentation-compliance:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-documentation-compliance.yml@main
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-documentation-compliance.yml@develop
     secrets: inherit
