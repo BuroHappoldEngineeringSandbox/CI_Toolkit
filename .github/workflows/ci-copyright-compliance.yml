@@ -25,6 +25,4 @@ concurrency:
 jobs:
   copyright-compliance:
     uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-copyright-compliance.yml@develop
-    secrets:
-      BHOM_APP_ID: ${{ secrets.BHOM_APP_ID }}
-      BHOM_APP_PRIVATE_KEY: ${{ secrets.BHOM_APP_PRIVATE_KEY }}
+    secrets: inherit
