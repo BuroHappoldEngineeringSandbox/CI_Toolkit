@@ -25,4 +25,6 @@ concurrency:
 jobs:
   code-compliance:
     uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-code-compliance.yml@develop
-    secrets: inherit
+    secrets:
+      BHOM_APP_ID: ${{ secrets.BHOM_APP_ID }}
+      BHOM_APP_PRIVATE_KEY: ${{ secrets.BHOM_APP_PRIVATE_KEY }}

@@ -28,6 +28,8 @@ concurrency:
 jobs:
   unit-tests:
     uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-unit-tests.yml@develop
-    secrets: inherit
+    secrets:
+      BHOM_APP_ID: ${{ secrets.BHOM_APP_ID }}
+      BHOM_APP_PRIVATE_KEY: ${{ secrets.BHOM_APP_PRIVATE_KEY }}
     with:
       pr_number: ${{ github.event.pull_request.number }}

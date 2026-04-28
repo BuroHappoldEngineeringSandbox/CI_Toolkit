@@ -29,4 +29,6 @@ concurrency:
 jobs:
   build:
     uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-build.yml@develop
-    secrets: inherit
+    secrets:
+      BHOM_APP_ID: ${{ secrets.BHOM_APP_ID }}
+      BHOM_APP_PRIVATE_KEY: ${{ secrets.BHOM_APP_PRIVATE_KEY }}
