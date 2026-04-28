@@ -6,17 +6,13 @@
 # The org ruleset for the beta maturity tier should require:
 #   <proxy-repo>/.github/workflows/ci-code-compliance.yml@develop
 #
-# The paths: filter mirrors CI_Toolkit's own ci-code-compliance.yml. It must be
-# duplicated here because GitHub does not propagate paths filters from a called reusable
-# workflow when evaluating ruleset required-workflow checks.
+# Note: paths filters are ignored by GitHub org rulesets — the workflow always runs on
+# every pull_request. Early exits within the reusable workflow handle no-op cases.
 
 name: Code Compliance
 
 on:
   pull_request:
-    paths:
-      - '**/*.cs'
-      - '**/*.csproj'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
