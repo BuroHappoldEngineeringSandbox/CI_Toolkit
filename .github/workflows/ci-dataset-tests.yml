@@ -1,0 +1,20 @@
+# Staging proxy workflow for CI_Toolkit — copy to .github/workflows/ci-dataset-tests.yml in your
+# staging org's proxy repo (e.g. BuroHappoldEngineeringSandbox/CI_Toolkit).
+#
+# Points to @develop — use only in staging orgs. Production proxies use templates/ci-dataset-tests.yml (@main).
+#
+# Required by rulesets: beta
+
+name: Dataset Unit Tests
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  dataset-tests:
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-dataset-tests.yml@develop
+    secrets: inherit
