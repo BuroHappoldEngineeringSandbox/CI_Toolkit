@@ -1,7 +1,11 @@
-# Staging proxy workflow for CI_Toolkit — copy to .github/workflows/ci-dataset-tests.yml in your
-# staging org's proxy repo (e.g. BuroHappoldEngineeringSandbox/CI_Toolkit).
+# Proxy workflow for CI_Toolkit — copy to .github/workflows/ci-dataset-tests.yml in your
+# org's proxy repo (e.g. BHoM/CI_Toolkit_Proxy).
 #
-# Points to @develop — use only in staging orgs. Production proxies use templates/ci-dataset-tests.yml (@main).
+# The org ruleset for the beta maturity tier should require:
+#   <proxy-repo>/.github/workflows/ci-dataset-tests.yml@main
+#
+# Note: paths filters are ignored by GitHub org rulesets — the workflow always runs on
+# every pull_request. Early exits within the reusable workflow handle no-op cases.
 #
 # Required by rulesets: beta
 
@@ -16,5 +20,5 @@ concurrency:
 
 jobs:
   dataset-tests:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-dataset-tests.yml@develop
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-dataset-tests.yml@main
     secrets: inherit

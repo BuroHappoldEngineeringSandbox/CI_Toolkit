@@ -4,7 +4,7 @@
 # Required by rulesets: beta
 #
 # The org ruleset for the beta maturity tier should require:
-#   <proxy-repo>/.github/workflows/ci-code-compliance.yml@develop
+#   <proxy-repo>/.github/workflows/ci-code-compliance.yml@main
 #
 # Note: paths filters are ignored by GitHub org rulesets — the workflow always runs on
 # every pull_request. Early exits within the reusable workflow handle no-op cases.
@@ -20,5 +20,5 @@ concurrency:
 
 jobs:
   code-compliance:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-code-compliance.yml@develop
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-code-compliance.yml@main
     secrets: inherit

@@ -4,7 +4,7 @@
 # Required by rulesets: alpha, beta
 #
 # The org ruleset for each applicable maturity tier should require:
-#   <proxy-repo>/.github/workflows/ci-unit-tests.yml@develop
+#   <proxy-repo>/.github/workflows/ci-unit-tests.yml@main
 #
 # Note: paths filters are ignored by GitHub org rulesets — the workflow always runs on
 # every pull_request. Early exits within the reusable workflow handle no-op cases.
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   unit-tests:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-unit-tests.yml@develop
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-unit-tests.yml@main
     secrets: inherit
     with:
       pr_number: ${{ github.event.pull_request.number }}
