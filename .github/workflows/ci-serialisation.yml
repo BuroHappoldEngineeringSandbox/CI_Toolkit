@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   serialisation:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-serialisation.yml@feat/ci-serialisation
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-serialisation.yml@develop
     secrets: inherit
     with:
       base_ref: ${{ github.base_ref }}
