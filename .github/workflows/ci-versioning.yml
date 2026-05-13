@@ -9,7 +9,7 @@ concurrency:
 
 jobs:
   versioning:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-versioning.yml@develop
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-versioning.yml@main
     secrets: inherit
     with:
       base_ref: ${{ github.base_ref }}
