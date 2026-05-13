@@ -20,5 +20,5 @@ concurrency:
 
 jobs:
   build:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-build.yml@main
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-build.yml@develop
     secrets: inherit

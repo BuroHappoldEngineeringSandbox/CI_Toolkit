@@ -20,5 +20,5 @@ concurrency:
 
 jobs:
   documentation-compliance:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-documentation-compliance.yml@main
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-documentation-compliance.yml@develop
     secrets: inherit

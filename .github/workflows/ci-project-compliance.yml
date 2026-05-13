@@ -20,5 +20,5 @@ concurrency:
 
 jobs:
   project-compliance:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-project-compliance.yml@main
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-project-compliance.yml@develop
     secrets: inherit
