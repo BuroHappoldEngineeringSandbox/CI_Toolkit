@@ -20,5 +20,5 @@ concurrency:
 
 jobs:
   copyright-compliance:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-copyright-compliance.yml@main
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-copyright-compliance.yml@develop
     secrets: inherit

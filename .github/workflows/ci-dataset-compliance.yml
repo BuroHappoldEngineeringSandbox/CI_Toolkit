@@ -20,5 +20,5 @@ concurrency:
 
 jobs:
   dataset-compliance:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-dataset-compliance.yml@main
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-dataset-compliance.yml@develop
     secrets: inherit

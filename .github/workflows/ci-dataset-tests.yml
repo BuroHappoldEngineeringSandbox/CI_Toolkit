@@ -20,5 +20,5 @@ concurrency:
 
 jobs:
   dataset-tests:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-dataset-tests.yml@main
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-dataset-tests.yml@develop
     secrets: inherit
