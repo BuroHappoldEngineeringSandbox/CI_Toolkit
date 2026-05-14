@@ -1,9 +1,8 @@
-# Staging proxy workflow for CI_Toolkit — copy to .github/workflows/ci-versioning.yml in your
-# staging org's proxy repo (e.g. BuroHappoldEngineeringSandbox/CI_Toolkit).
+# Sandbox proxy — calls CI_Toolkit on the feat/ci-versioning-extensibility branch
+# so the test_toolkit_repo and versioning_toolkit_repo inputs can be exercised
+# before the feature branch merges to develop.
 #
-# Points to @develop — use only in staging orgs. Production proxies use templates/ci-versioning.yml (@main).
-#
-# Required by rulesets: beta
+# Once feat/ci-versioning-extensibility merges to develop, change @feat/... to @develop.
 
 name: Versioning
 
@@ -16,5 +15,8 @@ concurrency:
 
 jobs:
   versioning:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-versioning.yml@develop
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-versioning.yml@feat/ci-versioning-extensibility
     secrets: inherit
+    with:
+      versioning_toolkit_repo: 'BuroHappoldEngineeringSandbox/Versioning_Toolkit'
+      test_toolkit_repo: 'BuroHappoldEngineeringSandbox/Test_Toolkit'
