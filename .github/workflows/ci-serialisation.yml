@@ -17,6 +17,8 @@ concurrency:
 jobs:
   serialisation:
     uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-serialisation.yml@develop
-    secrets: inherit
+    secrets:
+      BHOM_APP_ID: ${{ secrets.BHOM_APP_ID }}
+      BHOM_APP_PRIVATE_KEY: ${{ secrets.BHOM_APP_PRIVATE_KEY }}
     with:
       base_ref: ${{ github.base_ref }}
