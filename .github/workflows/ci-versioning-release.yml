@@ -1,4 +1,4 @@
-# Sandbox proxy — calls CI_Toolkit on develop with test_all: true.
+# Sandbox proxy -- calls CI_Toolkit on develop with test_all: true.
 
 name: Versioning (release)
 
