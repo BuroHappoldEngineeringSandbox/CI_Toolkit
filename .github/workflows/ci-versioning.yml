@@ -1,8 +1,4 @@
-# Sandbox proxy — calls CI_Toolkit on the feat/ci-versioning-extensibility branch
-# so the test_toolkit_repo and versioning_toolkit_repo inputs can be exercised
-# before the feature branch merges to develop.
-#
-# Once feat/ci-versioning-extensibility merges to develop, change @feat/... to @develop.
+# Sandbox proxy — calls CI_Toolkit on develop.
 
 name: Versioning
 
@@ -15,8 +11,9 @@ concurrency:
 
 jobs:
   versioning:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-versioning.yml@feat/ci-versioning-extensibility
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-versioning.yml@develop
     secrets: inherit
     with:
       versioning_toolkit_repo: 'BuroHappoldEngineeringSandbox/Versioning_Toolkit'
       test_toolkit_repo: 'BuroHappoldEngineeringSandbox/Test_Toolkit'
+
