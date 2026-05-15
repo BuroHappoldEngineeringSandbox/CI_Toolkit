@@ -15,5 +15,3 @@ jobs:
     secrets: inherit
     with:
       versioning_toolkit_repo: 'BuroHappoldEngineeringSandbox/Versioning_Toolkit'
-      test_toolkit_repo: 'BuroHappoldEngineeringSandbox/Test_Toolkit'
-
