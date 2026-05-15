@@ -1,14 +1,3 @@
-# Proxy workflow for CI_Toolkit — copy to .github/workflows/ci-project-compliance.yml
-# in your org's proxy repo (e.g. BHoM/CI_Proxy).
-#
-# Required by rulesets: alpha, beta
-#
-# The org ruleset for each applicable maturity tier should require:
-#   <proxy-repo>/.github/workflows/ci-project-compliance.yml@main
-#
-# Note: paths filters are ignored by GitHub org rulesets — the workflow always runs on
-# every pull_request. Early exits within the reusable workflow handle no-op cases.
-
 name: Project Compliance
 
 on:
@@ -21,4 +10,6 @@ concurrency:
 jobs:
   project-compliance:
     uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-project-compliance.yml@develop
-    secrets: inherit
+    secrets:
+      BHOM_APP_ID: ${{ secrets.BHOM_APP_ID }}
+      BHOM_APP_PRIVATE_KEY: ${{ secrets.BHOM_APP_PRIVATE_KEY }}
