@@ -1,0 +1,19 @@
+# Sandbox proxy — calls CI_Toolkit on develop with test_all: true.
+
+name: Versioning (release)
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  versioning:
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-versioning.yml@develop
+    secrets: inherit
+    with:
+      test_all: true
+      versioning_toolkit_repo: 'BuroHappoldEngineeringSandbox/Versioning_Toolkit'
+      test_toolkit_repo: 'BuroHappoldEngineeringSandbox/Test_Toolkit'
