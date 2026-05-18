@@ -1,7 +1,7 @@
-# Staging proxy workflow for CI_Toolkit — copy to .github/workflows/ci-serialisation.yml in your
+# Staging proxy workflow for CI_Toolkit â€” copy to .github/workflows/ci-serialisation.yml in your
 # staging org's proxy repo (e.g. BuroHappoldEngineeringSandbox/CI_Toolkit_Proxy).
 #
-# Points to @develop — use only in staging orgs. Production proxies use templates/ci-serialisation.yml (@main).
+# Points to @fix/serialisation-no-verify-guard â€” use only in staging orgs. Production proxies use templates/ci-serialisation.yml (@main).
 #
 # Required by rulesets: beta
 
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   serialisation:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-serialisation.yml@develop
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-serialisation.yml@fix/serialisation-no-verify-guard
     secrets:
       BHOM_APP_ID: ${{ secrets.BHOM_APP_ID }}
       BHOM_APP_PRIVATE_KEY: ${{ secrets.BHOM_APP_PRIVATE_KEY }}
