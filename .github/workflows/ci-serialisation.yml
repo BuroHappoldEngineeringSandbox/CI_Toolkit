@@ -1,0 +1,22 @@
+# Staging proxy workflow for CI_Toolkit -- copy to .github/workflows/ci-serialisation.yml in your
+# staging org proxy repo (e.g. BuroHappoldEngineeringSandbox/CI_Toolkit_Proxy).
+#
+# Required by rulesets: beta
+
+name: Serialisation
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  serialisation:
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-serialisation.yml@develop
+    secrets:
+      BHOM_APP_ID: ${{ secrets.BHOM_APP_ID }}
+      BHOM_APP_PRIVATE_KEY: ${{ secrets.BHOM_APP_PRIVATE_KEY }}
+    with:
+      base_ref: ${{ github.base_ref }}
