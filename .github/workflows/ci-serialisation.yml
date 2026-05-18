@@ -20,3 +20,4 @@ jobs:
       BHOM_APP_PRIVATE_KEY: ${{ secrets.BHOM_APP_PRIVATE_KEY }}
     with:
       base_ref: ${{ github.base_ref }}
+      serialisation_engine_repo: 'BuroHappoldEngineeringSandbox/LifeCycleAssessment_Toolkit'
