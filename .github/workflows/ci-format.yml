@@ -20,5 +20,5 @@ concurrency:
 
 jobs:
   format:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-format.yml@develop
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-format.yml@pr61-test
     secrets: inherit
