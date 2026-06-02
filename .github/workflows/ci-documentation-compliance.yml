@@ -9,7 +9,7 @@ concurrency:
 
 jobs:
   documentation-compliance:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-documentation-compliance.yml@develop
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-documentation-compliance.yml@pr61-test
     secrets:
       BHOM_APP_ID: ${{ secrets.BHOM_APP_ID }}
       BHOM_APP_PRIVATE_KEY: ${{ secrets.BHOM_APP_PRIVATE_KEY }}
