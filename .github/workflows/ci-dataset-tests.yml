@@ -9,7 +9,7 @@ concurrency:
 
 jobs:
   dataset-tests:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-dataset-tests.yml@develop
+    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-dataset-tests.yml@feat/ci-dataset-tests-inputs-and-hard-fail
     secrets:
       BHOM_APP_ID: ${{ secrets.BHOM_APP_ID }}
       BHOM_APP_PRIVATE_KEY: ${{ secrets.BHOM_APP_PRIVATE_KEY }}
