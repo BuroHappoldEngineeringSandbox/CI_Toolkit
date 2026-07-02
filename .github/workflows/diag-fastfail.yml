@@ -1,0 +1,127 @@
+# Diagnostic workflow. Isolates the ci-versioning.yml fast-fail block
+# (CI_Toolkit#89) so its download + regex + compare behaviour can be
+# validated against a real runner and a real IncludedDLLs.txt Release asset,
+# without needing to stand up a full ci-versioning consumer flow.
+#
+# Runs three phases:
+#   1. Download baseline + print expected set (eyeball the regex)
+#   2. Positive: synthetic Assemblies dir with every expected DLL present
+#      -> expects '::notice::' and exit 0
+#   3. Negative: synthetic Assemblies dir missing one DLL
+#      -> expects '::error::' (step allowed to fail so workflow completes)
+#
+# Delete after validation.
+
+name: Diag - Fast-fail behaviour
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_installer_repo:
+        type: string
+        required: false
+        default: 'BuroHappoldEngineeringSandbox/BHoM_Installer'
+        description: Installer repo to fetch IncludedDLLs.txt from.
+
+jobs:
+  diag:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Download baseline + preview
+        id: download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $baselineRepo = '${{ inputs.baseline_installer_repo }}'
+          $baselineDir  = Join-Path $env:RUNNER_TEMP 'versioning-baseline'
+          New-Item -ItemType Directory -Force -Path $baselineDir | Out-Null
+
+          gh release download --repo $baselineRepo `
+              --pattern 'IncludedDLLs.txt' `
+              --dir $baselineDir
+          if ($LASTEXITCODE -ne 0) {
+              throw "gh release download failed against $baselineRepo"
+          }
+
+          $file = Join-Path $baselineDir 'IncludedDLLs.txt'
+          Write-Host "=== IncludedDLLs.txt raw preview (first 30 lines) ==="
+          Get-Content $file -TotalCount 30 | ForEach-Object { Write-Host "  $_" }
+
+          $canonicalRegex = '(?i)(oM|_Engine|_Adapter)\.dll$|(?i)Revit_.+20\d{2}\.dll$'
+          $expected = Get-Content $file |
+              ForEach-Object { [System.IO.Path]::GetFileName($_.Trim()) } |
+              Where-Object { $_ -match $canonicalRegex } |
+              Sort-Object -Unique
+
+          Write-Host ""
+          Write-Host "=== Expected canonical set (regex-filtered, count = $($expected.Count)) ==="
+          $expected | ForEach-Object { Write-Host "  $_" }
+
+          "baseline_file=$file"                                     >> $env:GITHUB_OUTPUT
+          "expected_count=$($expected.Count)"                       >> $env:GITHUB_OUTPUT
+
+      - name: Positive - all expected DLLs present
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASELINE_FILE: ${{ steps.download.outputs.baseline_file }}
+        run: |
+          $canonicalRegex = '(?i)(oM|_Engine|_Adapter)\.dll$|(?i)Revit_.+20\d{2}\.dll$'
+          $expected = Get-Content $env:BASELINE_FILE |
+              ForEach-Object { [System.IO.Path]::GetFileName($_.Trim()) } |
+              Where-Object { $_ -match $canonicalRegex } |
+              Sort-Object -Unique
+
+          $assembliesDir = Join-Path $env:ProgramData 'BHoM\Assemblies'
+          New-Item -ItemType Directory -Force -Path $assembliesDir | Out-Null
+          foreach ($name in $expected) {
+              New-Item -ItemType File -Force -Path (Join-Path $assembliesDir $name) | Out-Null
+          }
+
+          $present = @(Get-ChildItem $assembliesDir -Filter '*.dll' -ErrorAction SilentlyContinue |
+                       ForEach-Object { $_.Name })
+          $missing = @($expected | Where-Object { $_ -notin $present })
+
+          if ($missing.Count -gt 0) {
+              Write-Host "::error title=Positive case failed unexpectedly::Missing: $($missing -join ', ')"
+              exit 1
+          }
+          Write-Host "::notice::Positive case OK. $($expected.Count) canonical DLLs matched."
+
+      - name: Negative - remove one expected DLL, expect error
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASELINE_FILE: ${{ steps.download.outputs.baseline_file }}
+        run: |
+          $canonicalRegex = '(?i)(oM|_Engine|_Adapter)\.dll$|(?i)Revit_.+20\d{2}\.dll$'
+          $expected = Get-Content $env:BASELINE_FILE |
+              ForEach-Object { [System.IO.Path]::GetFileName($_.Trim()) } |
+              Where-Object { $_ -match $canonicalRegex } |
+              Sort-Object -Unique
+
+          $assembliesDir = Join-Path $env:ProgramData 'BHoM\Assemblies'
+
+          # Remove one — pick the first alphabetically to make results predictable.
+          $victim = $expected | Select-Object -First 1
+          Remove-Item (Join-Path $assembliesDir $victim) -Force
+          Write-Host "Removed '$victim' from synthetic Assemblies dir."
+
+          $present = @(Get-ChildItem $assembliesDir -Filter '*.dll' -ErrorAction SilentlyContinue |
+                       ForEach-Object { $_.Name })
+          $missing = @($expected | Where-Object { $_ -notin $present })
+
+          if ($missing.Count -gt 0) {
+              Write-Host "::error title=Versioning prerequisites missing::The following DLLs are expected but were not produced: $($missing -join ', ')."
+              exit 1
+          }
+          Write-Host "::error title=Negative case failed unexpectedly::Removed '$victim' but comparison did not detect any missing DLL."
+          exit 1
+
+      - name: Summarise
+        run: |
+          Write-Host "=== Summary ==="
+          Write-Host "Positive step: check the previous 'Positive' step outcome above (expect success)."
+          Write-Host "Negative step: check the previous 'Negative' step outcome above (expect failure, with continue-on-error)."
