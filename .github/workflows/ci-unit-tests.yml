@@ -1,0 +1,33 @@
+# Proxy workflow. Copy to .github/workflows/ci-unit-tests.yml in your org's proxy
+# repo and require <proxy-repo>/.github/workflows/ci-unit-tests.yml@develop in the
+# org ruleset for the alpha, beta maturity tier(s).
+#
+# Rulesets ignore event filters on required workflows, so this file has
+# no paths filter. The composite self-skips when no relevant files have changed.
+#
+# Extending orgs: override test_toolkit_repo via with: to point at a fork.
+# Dep forks must carry the relevant changes on the PR's base branch,
+# not the fork's default branch, since resolve-dependencies clones from the base.
+# Workflow name CI keeps check contexts bare: required contexts are the job names.
+
+name: CI
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 30
+    steps:
+      - name: Run unit tests
+        uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/actions/ci-unit-tests@develop
+        with:
+          app_id: ${{ secrets.BHOM_APP_ID }}
+          private_key: ${{ secrets.BHOM_APP_PRIVATE_KEY }}
+          # For extending orgs, uncomment and set your fork path:
+          # test_toolkit_repo: 'YourOrg/Test_Toolkit'
