@@ -1,15 +1,16 @@
-# Proxy workflow for CI_Toolkit — copy to .github/workflows/ci-unit-tests.yml in your
-# org's proxy repo (e.g. BHoM/CI_Proxy).
+# Proxy workflow. Copy to .github/workflows/ci-unit-tests.yml in your org's proxy
+# repo and require <proxy-repo>/.github/workflows/ci-unit-tests.yml@develop in the
+# org ruleset for the alpha, beta maturity tier(s).
 #
-# Required by rulesets: alpha, beta
+# Rulesets ignore event filters on required workflows, so this file has
+# no paths filter. The composite self-skips when no relevant files have changed.
 #
-# The org ruleset for each applicable maturity tier should require:
-#   <proxy-repo>/.github/workflows/ci-unit-tests.yml@main
-#
-# Note: paths filters are ignored by GitHub org rulesets — the workflow always runs on
-# every pull_request. Early exits within the reusable workflow handle no-op cases.
+# Extending orgs: override test_toolkit_repo via with: to point at a fork.
+# Dep forks must carry the relevant changes on the PR's base branch,
+# not the fork's default branch, since resolve-dependencies clones from the base.
+# Workflow name CI keeps check contexts bare: required contexts are the job names.
 
-name: Unit Tests
+name: CI
 
 on:
   pull_request:
@@ -20,9 +21,13 @@ concurrency:
 
 jobs:
   unit-tests:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-unit-tests.yml@develop
-    secrets:
-      BHOM_APP_ID: ${{ secrets.BHOM_APP_ID }}
-      BHOM_APP_PRIVATE_KEY: ${{ secrets.BHOM_APP_PRIVATE_KEY }}
-    with:
-      pr_number: ${{ github.event.pull_request.number }}
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 30
+    steps:
+      - name: Run unit tests
+        uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/actions/ci-unit-tests@develop
+        with:
+          app_id: ${{ secrets.BHOM_APP_ID }}
+          private_key: ${{ secrets.BHOM_APP_PRIVATE_KEY }}
+          # For extending orgs, uncomment and set your fork path:
+          # test_toolkit_repo: 'YourOrg/Test_Toolkit'

@@ -1,15 +1,12 @@
-# Proxy workflow for CI_Toolkit — copy to .github/workflows/ci-format.yml in your
-# org's proxy repo (e.g. BHoM/CI_Proxy).
+# Proxy workflow. Copy to .github/workflows/ci-format.yml in your org's proxy
+# repo and require <proxy-repo>/.github/workflows/ci-format.yml@develop in the
+# org ruleset for the prototype, alpha, beta maturity tier(s).
 #
-# Required by rulesets: prototype, alpha, beta
-#
-# The org ruleset for each applicable maturity tier should require:
-#   <proxy-repo>/.github/workflows/ci-format.yml@main
-#
-# Note: paths filters are ignored by GitHub org rulesets — the workflow always runs on
-# every pull_request. Early exits within the reusable workflow handle no-op cases.
+# Rulesets ignore event filters on required workflows, so this file has
+# no paths filter. The composite self-skips when no relevant files have changed.
+# Workflow name CI keeps check contexts bare: required contexts are the job names.
 
-name: Format
+name: CI
 
 on:
   pull_request:
@@ -20,5 +17,11 @@ concurrency:
 
 jobs:
   format:
-    uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/workflows/ci-format.yml@develop
-    secrets: inherit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Run format
+        uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/actions/ci-format@develop
+        with:
+          app_id: ${{ secrets.BHOM_APP_ID }}
+          private_key: ${{ secrets.BHOM_APP_PRIVATE_KEY }}
