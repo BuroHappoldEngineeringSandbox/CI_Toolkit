@@ -1,0 +1,27 @@
+# Proxy workflow. Copy to .github/workflows/ci-format.yml in your org's proxy
+# repo and require <proxy-repo>/.github/workflows/ci-format.yml@develop in the
+# org ruleset for the prototype, alpha, beta maturity tier(s).
+#
+# Rulesets ignore event filters on required workflows, so this file has
+# no paths filter. The composite self-skips when no relevant files have changed.
+# Workflow name CI keeps check contexts bare: required contexts are the job names.
+
+name: CI
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Run format
+        uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/actions/ci-format@develop
+        with:
+          app_id: ${{ secrets.BHOM_APP_ID }}
+          private_key: ${{ secrets.BHOM_APP_PRIVATE_KEY }}
