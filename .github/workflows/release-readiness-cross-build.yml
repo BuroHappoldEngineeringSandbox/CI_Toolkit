@@ -1,0 +1,191 @@
+# SANDBOX reshape-validation harness for release-readiness-cross-build.
+#
+# Purpose: prove the workflow_call + scope reshape plumbing (feasibility pass
+# 2026-07-15, spec 2026-07-15-release-readiness-reshape-oss-css-split-design.md)
+# on BuroHappoldEngineeringSandbox, which the sandbox App CAN read. This is NOT
+# the full workflow: dry_run skips builds and the sandbox App cannot clone the
+# real prod deps, so the build/versioning legs (unchanged from Phase 2, already
+# prod-validated on Admin run 29410758534) are deliberately omitted. What this
+# harness exercises is exactly what the reshape changes:
+#   - workflow_call trigger accepts scope + inputs + secrets
+#   - scope routes org selection and the redact toggle in the resolve job
+#   - a downstream job consumes needs.resolve.outputs.subjects (matrix source)
+#     and observes caller-context github.* (issue-repo targeting proof)
+#
+# Single-org sandbox note: the sandbox has ONE org, so all scopes discover it.
+# scope=bhom exercises the NEW clean verbatim path; scope=both exercises the
+# transition redaction path. That proves the scope SWITCH routes correctly; the
+# two-org cohort math and prod redaction internals are covered by review + the
+# live Admin run, not here.
+
+name: Release Readiness Cross-Build (sandbox reshape harness)
+
+on:
+  workflow_call:
+    inputs:
+      scope:          { type: string,  required: true }        # bhom | bhe | both
+      subject_filter: { type: string,  required: false, default: '' }
+      dry_run:        { type: boolean, required: false, default: true }
+    secrets:
+      BHOM_APP_ID:          { required: true }
+      BHOM_APP_PRIVATE_KEY: { required: true }
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Which trust domain to check.
+        type: choice
+        options: [bhom, bhe, both]
+        default: bhom
+      subject_filter:
+        description: Comma-separated subject keys to limit the set (empty = all).
+        type: string
+        required: false
+        default: ''
+      dry_run:
+        description: Resolve + render only; no build (sandbox default true).
+        type: boolean
+        required: false
+        default: true
+
+concurrency:
+  group: release-readiness-cross-build-${{ inputs.scope }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Resolve cohort + tags + render summary (scope=${{ inputs.scope }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      subjects: ${{ steps.emit.outputs.subjects }}
+    permissions:
+      contents: read
+    steps:
+      - name: Mint App token
+        id: token
+        uses: actions/create-github-app-token@07e2b760664f080c40eec4eacf7477256582db36  # v3.1.1
+        with:
+          client-id:   ${{ secrets.BHOM_APP_ID }}
+          private-key: ${{ secrets.BHOM_APP_PRIVATE_KEY }}
+          owner:       BuroHappoldEngineeringSandbox
+
+      - name: Discover cohort + resolve tags + render summary
+        id: emit
+        env:
+          TOKEN:          ${{ steps.token.outputs.token }}
+          SCOPE:          ${{ inputs.scope }}
+          SUBJECT_FILTER: ${{ inputs.subject_filter }}
+          DRY_RUN:        ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          # --- scope routing ---------------------------------------------------
+          # In prod: bhom -> [BHoM] verbatim; bhe/both -> [BHoM,BHE] with the BHE
+          # names redacted on the public run. Sandbox has one org, so every scope
+          # discovers it; the redact toggle is what the scope switch controls and
+          # what we are validating here.
+          case "$SCOPE" in
+            bhom)        orgs=(BuroHappoldEngineeringSandbox); redact=false ;;
+            bhe|both)    orgs=(BuroHappoldEngineeringSandbox); redact=true  ;;
+            *) echo "::error::Unknown scope '$SCOPE' (expected bhom|bhe|both)."; exit 1 ;;
+          esac
+          echo "::notice::scope=$SCOPE -> orgs=${orgs[*]} redact=$redact"
+
+          # --- 1. discover beta cohort ----------------------------------------
+          discover_org() {
+              GH_TOKEN="$TOKEN" gh api \
+                  -H "Accept: application/vnd.github+json" \
+                  -H "X-GitHub-Api-Version: 2022-11-28" \
+                  --paginate \
+                  "/orgs/$1/properties/values?per_page=100" \
+                  --jq '.[] | select(any(.properties[]; .property_name=="maturity" and .value=="beta")) | .repository_name' \
+                  | sed "s|^|$1/|" | sort -u
+          }
+          cohort=""
+          for org in "${orgs[@]}"; do
+              cohort=$(printf '%s\n%s\n' "$cohort" "$(discover_org "$org")" | grep -v '^$' | sort -u)
+          done
+          count=$(printf '%s\n' "$cohort" | grep -c '.' || true)
+          echo "::notice::$count beta-tier repo(s) discovered."
+          if [ "$count" -eq 0 ]; then
+              echo "::error::Empty cohort; nothing to resolve. Check the maturity property."
+              exit 1
+          fi
+
+          # --- 2. resolve last-release tag per repo (real tag scheme) ---------
+          tag_regex='^v[0-9]+\.[0-9]+\.β\.[0-9]+$'
+          resolve_tag() {
+              local repo="$1" tags
+              tags=$(git ls-remote --tags "https://x-access-token:${TOKEN}@github.com/${repo}.git" 2>/dev/null \
+                  | awk '{print $2}' | sed 's|^refs/tags/||' | grep -v '\^{}$' | grep -E "$tag_regex" || true)
+              if [ -z "$tags" ]; then printf 'develop'; return; fi
+              printf '%s\n' "$tags" \
+                  | sed -E 's/^v([0-9]+)\.([0-9]+)\.β\.([0-9]+)$/\1 \2 \3 &/' \
+                  | sort -k1,1n -k2,2n -k3,3n | tail -n 1 | awk '{print $NF}'
+          }
+
+          # --- 3. build subject keys, honouring the redact toggle -------------
+          subject_keys=()
+          idx=0
+          {
+            echo "## Release-readiness resolve (sandbox harness) — scope=\`$SCOPE\`"
+            echo
+            echo "Redaction: \`$redact\`. Dry run: \`${DRY_RUN}\`."
+            echo
+            echo "| Subject key | Anchor tag |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          while IFS= read -r repo; do
+              [ -z "$repo" ] && continue
+              tag=$(resolve_tag "$repo")
+              if [ "$redact" = "true" ]; then
+                  idx=$((idx+1)); key="redacted-$idx"
+                  echo "::add-mask::$repo"
+                  echo "::add-mask::${repo#*/}"
+              else
+                  key="$repo"
+              fi
+              # subject_filter (matches verbatim name, org-qualified, or key)
+              if [ -n "$SUBJECT_FILTER" ]; then
+                  keep=false
+                  IFS=',' read -ra fs <<< "$SUBJECT_FILTER"
+                  for f in "${fs[@]}"; do f="$(echo "$f" | xargs)"
+                      [ "$f" = "${repo#*/}" ] || [ "$f" = "$repo" ] || [ "$f" = "$key" ] && keep=true
+                  done
+                  $keep || continue
+              fi
+              subject_keys+=("$key")
+              echo "| \`$key\` | \`$tag\` |" >> "$GITHUB_STEP_SUMMARY"
+          done <<< "$cohort"
+
+          echo "::notice::Resolved ${#subject_keys[@]} subject key(s)."
+          if [ "${#subject_keys[@]}" -eq 0 ]; then
+              echo "subjects=[]" >> "$GITHUB_OUTPUT"
+          else
+              printf '%s\n' "${subject_keys[@]}" | jq -R . | jq -sc . | sed 's/^/subjects=/' >> "$GITHUB_OUTPUT"
+          fi
+
+  # Stand-in for the build matrix: proves subjects flow into a matrix and that
+  # github.* inside the reusable resolves to the CALLER (issue-repo targeting).
+  # No clone/build (sandbox cannot clone prod deps; dry_run skips it anyway).
+  report:
+    name: leg ${{ matrix.subject }}
+    needs: resolve
+    if: ${{ inputs.dry_run != true && needs.resolve.outputs.subjects != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        subject: ${{ fromJSON(needs.resolve.outputs.subjects) }}
+    steps:
+      - name: Show leg identity + caller context
+        run: |
+          echo "Subject key: ${{ matrix.subject }}"
+          echo "Caller repository (github.repository): ${{ github.repository }}"
+          echo "Caller ref: ${{ github.ref }}"
+          echo "Run id: ${{ github.run_id }}"
+          echo "::notice::In prod this leg would clone + build the subject at develop against the cohort at tags. Aggregate issue would target --repo explicitly (github.repository = caller here)."
