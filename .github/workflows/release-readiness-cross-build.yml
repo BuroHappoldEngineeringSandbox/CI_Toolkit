@@ -87,9 +87,15 @@ jobs:
           # names redacted on the public run. Sandbox has one org, so every scope
           # discovers it; the redact toggle is what the scope switch controls and
           # what we are validating here.
+          # bhom : public run, names verbatim.
+          # bhe  : caller host is PRIVATE, so the whole run is private -> no
+          #        redaction needed (this is the OSS/CSS-split end state).
+          # both : legacy transition path on the public Admin dispatch -> redaction
+          #        intact until the scoped callers are proven, then removed.
           case "$SCOPE" in
-            bhom)        orgs=(BuroHappoldEngineeringSandbox); redact=false ;;
-            bhe|both)    orgs=(BuroHappoldEngineeringSandbox); redact=true  ;;
+            bhom)   orgs=(BuroHappoldEngineeringSandbox); redact=false ;;
+            bhe)    orgs=(BuroHappoldEngineeringSandbox); redact=false ;;
+            both)   orgs=(BuroHappoldEngineeringSandbox); redact=true  ;;
             *) echo "::error::Unknown scope '$SCOPE' (expected bhom|bhe|both)."; exit 1 ;;
           esac
           echo "::notice::scope=$SCOPE -> orgs=${orgs[*]} redact=$redact"
