@@ -1,0 +1,60 @@
+name: "_probe versioning fast-fail"
+description: >
+  THROWAWAY probe for CI_Toolkit ci-versioning H1 fix. Exercises the fast-fail
+  step's blast radius in isolation: real gh release download of the baseline
+  IncludedDLLs.txt, and the vendored Assert-VersioningPrerequisites.ps1 resolved
+  via GITHUB_ACTION_PATH and invoked with -Force:$force under pwsh 7. Assemblies
+  dir is deliberately empty so every canonical DLL is "missing", which is what
+  drives the force / deletion-only guards. Not for production use.
+
+inputs:
+  force:
+    required: true
+  baseline_installer_repo:
+    required: true
+  changed_list_path:
+    description: Path to the ACMRT change list produced by compute-changed-files.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Fast-fail on missing versioning-critical DLLs (probe)
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        $baselineRepo = '${{ inputs.baseline_installer_repo }}'
+        $baselineDir  = Join-Path $env:RUNNER_TEMP 'versioning-baseline'
+        New-Item -ItemType Directory -Force -Path $baselineDir | Out-Null
+
+        $downloaded = $false
+        try {
+            $latestTag = gh release list --repo $baselineRepo --limit 1 --json tagName --jq '.[0].tagName' 2>$null
+            if ($LASTEXITCODE -eq 0 -and $latestTag) {
+                gh release download $latestTag --repo $baselineRepo `
+                    --pattern 'IncludedDLLs.txt' `
+                    --dir $baselineDir 2>$null
+                if ($LASTEXITCODE -eq 0 -and (Test-Path (Join-Path $baselineDir 'IncludedDLLs.txt'))) {
+                    $downloaded = $true
+                }
+            }
+        } catch { }
+
+        if (-not $downloaded) {
+            Write-Host "::error::PROBE PRECONDITION FAILED: no IncludedDLLs.txt on $baselineRepo (cannot exercise fast-fail)."
+            exit 1
+        }
+        Write-Host "Baseline: $baselineRepo@$latestTag"
+
+        # Empty assemblies dir => every canonical expected DLL is missing.
+        $emptyAsm = Join-Path $env:RUNNER_TEMP 'empty-assemblies'
+        New-Item -ItemType Directory -Force -Path $emptyAsm | Out-Null
+
+        $force = '${{ inputs.force }}' -eq 'true'
+        & "$env:GITHUB_ACTION_PATH\scripts\Assert-VersioningPrerequisites.ps1" `
+            -BaselineFile    (Join-Path $baselineDir 'IncludedDLLs.txt') `
+            -AssembliesDir   $emptyAsm `
+            -ChangedListPath '${{ inputs.changed_list_path }}' `
+            -Force:$force
+        exit $LASTEXITCODE

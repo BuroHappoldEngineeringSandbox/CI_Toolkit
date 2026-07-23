@@ -1,0 +1,77 @@
+name: _probe versioning fast-fail
+
+# THROWAWAY validation harness for the CI_Toolkit ci-versioning H1 fix.
+# Runs on PRs that touch this branch's probe files. Delete after validating.
+
+on:
+  pull_request:
+    paths:
+      - '.github/actions/_probe-versioning-fastfail/**'
+      - '.github/workflows/_probe-versioning-fastfail.yml'
+      - 'probe-src/**'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: missing-fail          # canonical DLLs missing, no force, real source change -> fail
+            force: 'false'
+            empty: 'false'
+            expect: failure
+          - name: force-skip            # force bypass -> succeed
+            force: 'true'
+            empty: 'false'
+            expect: success
+          - name: deletion-only-skip    # empty ACMRT list (deletion-only PR) -> succeed
+            force: 'false'
+            empty: 'true'
+            expect: success
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Compute changed files
+        uses: BuroHappoldEngineeringAdmin/CI_Toolkit/.github/actions/compute-changed-files@develop
+        with:
+          patterns: '*.cs'
+          skip_if_not_pr: 'false'
+          output_file: changed_versioning_files.txt
+
+      - name: Show / tamper change list
+        shell: bash
+        run: |
+          echo "--- changed_versioning_files.txt (as produced) ---"
+          cat changed_versioning_files.txt || echo "(absent)"
+          if [ "${{ matrix.empty }}" = "true" ]; then
+            : > changed_versioning_files.txt
+            echo "--- emptied to simulate a deletion-only PR ---"
+          fi
+
+      - name: Run fast-fail probe
+        id: probe
+        continue-on-error: true
+        uses: ./.github/actions/_probe-versioning-fastfail
+        with:
+          force: ${{ matrix.force }}
+          baseline_installer_repo: BuroHappoldEngineeringSandbox/BHoM_Installer
+          changed_list_path: ${{ github.workspace }}/changed_versioning_files.txt
+
+      - name: Assert outcome
+        shell: bash
+        run: |
+          got='${{ steps.probe.outcome }}'
+          want='${{ matrix.expect }}'
+          echo "leg=${{ matrix.name }} force=${{ matrix.force }} empty=${{ matrix.empty }} outcome=$got expected=$want"
+          if [ "$got" != "$want" ]; then
+            echo "::error::leg ${{ matrix.name }}: probe outcome '$got' != expected '$want'"
+            exit 1
+          fi
+          echo "leg ${{ matrix.name }}: OK"
