@@ -35,5 +35,7 @@ jobs:
           Write-Host "PROBE: CodeComplianceTest_oM present = $(Test-Path $dll)"
           Write-Host "PROBE: total dlls = $((Get-ChildItem 'C:\ProgramData\BHoM\Assemblies' -Filter *.dll -EA SilentlyContinue).Count)"
           if (-not (Test-Path $dll)) { exit 1 }
+      - name: Build the runners (RunnerFixture uses --no-build)
+        run: dotnet build tools/ComplianceRunner/Platform.slnx -c Debug --nologo
       - name: ComplianceRunner tests
-        run: dotnet test tools/ComplianceRunner/tests/Compliance.Tests --nologo
+        run: dotnet test tools/ComplianceRunner/tests/Compliance.Tests --no-build --nologo

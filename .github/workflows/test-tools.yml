@@ -110,5 +110,16 @@ jobs:
           }
           Write-Host "::notice title=Test Tools::CodeComplianceTest_oM.dll present ($([int](Get-Item $dll).Length) bytes)."
 
+      # RunnerFixture invokes the runners with `dotnet run --no-build`, so their output must
+      # already exist. `dotnet test` does not produce it: Compliance.Tests has no
+      # ProjectReference to either executable project, so only Compliance.Shared and the test
+      # assembly get built. RunnerFixture.cs:9-11 claims the solution "is built automatically
+      # when running via the test project", which is not true and is why every process-invoking
+      # test failed with exit 1 and empty stdout the first time this job ran. Building the
+      # solution here satisfies the prerequisite the fixture documents without changing the
+      # fixture. Debug, because that is what `dotnet run --no-build` resolves to by default.
+      - name: Build the runners (RunnerFixture uses --no-build)
+        run: dotnet build tools/ComplianceRunner/Platform.slnx -c Debug --nologo
+
       - name: ComplianceRunner tests
-        run: dotnet test tools/ComplianceRunner/tests/Compliance.Tests --nologo
+        run: dotnet test tools/ComplianceRunner/tests/Compliance.Tests --no-build --nologo
