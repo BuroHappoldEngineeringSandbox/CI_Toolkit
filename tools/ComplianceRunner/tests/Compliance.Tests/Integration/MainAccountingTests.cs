@@ -101,7 +101,9 @@ public class MainAccountingTests
           + "verbose flag, which would resolve the stream-mixing issue.");
 
         // The consequence, asserted rather than described: the raw stdout is not valid JSON.
-        Assert.Throws<JsonException>(() => JsonDocument.Parse(stdout),
+        // Assert.Catch rather than Assert.Throws because the concrete type is
+        // JsonReaderException, a subclass, and Assert.Throws matches the exact type only.
+        Assert.Catch<JsonException>(() => JsonDocument.Parse(stdout),
             "Raw stdout does not parse as JSON once a skip line is present. Callers using "
           + "--output json must strip leading diagnostics. The existing E2E tests parse "
           + "stdout directly and only pass because the filter path prints nothing.");
