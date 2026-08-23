@@ -1,0 +1,27 @@
+# SANDBOX-ONLY probe, not for merge. Proves Compliance.Unit.Tests builds and passes on a
+# bare hosted runner with no BHoM install and no Test_Toolkit.
+name: probe-compliance-unit-tests
+on:
+  push:
+    branches: [test/compliance-unit-tests-runnable]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Confirm no BHoM install on this runner
+        shell: pwsh
+        run: |
+          $p = 'C:\ProgramData\BHoM\Assemblies'
+          Write-Host "PROBE: BHoM assemblies dir exists = $(Test-Path $p)"
+          if (Test-Path $p) { Write-Host "PROBE: dll count = $((Get-ChildItem $p -Filter *.dll).Count)" }
+      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5
+        with:
+          dotnet-version: |
+            8.0
+            10.x
+      - name: ComplianceRunner unit tests
+        run: dotnet test tools/ComplianceRunner/tests/Compliance.Unit.Tests --nologo
