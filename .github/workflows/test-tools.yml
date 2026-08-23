@@ -6,11 +6,28 @@
 # all: PR #131 reported zero. That left every runner regression test inert, including the
 # one added in #131 to stop the System.Drawing.Common reference being dropped as unused.
 #
-# Compliance.Tests is deliberately NOT run here. Compliance.Shared references BHoM.dll,
-# BHoM_Engine.dll, CodeComplianceTest_oM.dll, Test_Engine.dll and Test_oM.dll by HintPath
-# out of C:\ProgramData\BHoM\Assemblies, so it cannot even compile without a BHoM install
-# plus a built Test_Toolkit. Adding it needs the dependency-resolution step and belongs in
-# a separate change; a job that fails for environmental reasons is worse than no job.
+# Two jobs, deliberately separate.
+#
+#   dotnet-tests       Hermetic. Checkout, SDK, run. No network beyond NuGet, no BHoM.
+#   compliance-tests   Resolves the Test_Toolkit dependency graph first, so Compliance.Tests
+#                      can compile and its entry-point tests can run.
+#
+# Why Compliance.Tests needs the second job. Compliance.Shared HintPaths five assemblies out
+# of C:\ProgramData\BHoM\Assemblies. Measured on a machine carrying the BHoM installer, four
+# resolve and only CodeComplianceTest_oM.dll is missing, because it is built by
+# BHoM/Test_Toolkit (CodeCompliance_oM/CodeComplianceTest_oM.csproj) rather than shipped in
+# the installer payload. AnnotationConvert.cs then fails CS0234 on BH.oM.Test.CodeCompliance
+# and takes the whole project down, which is why all nine of its test files were inert.
+#
+# resolve-dependencies in mode: seeds with seed BHoM/Test_Toolkit is exactly what ci-compliance
+# already does before prepare-runner publishes ComplianceRunner, and ComplianceRunner.csproj
+# HintPaths the same assembly. That path demonstrably works in production, so it works here.
+#
+# Kept as a separate job rather than extra steps on the first for two reasons. The hermetic
+# suite stays fast and stays independent: a resolve-dependencies breakage cannot also suppress
+# the runner tests that would catch it, which matters because resolve-dependencies is itself
+# one of the actions this repository ships. And a dependency-graph build is minutes where the
+# hermetic suite is seconds, so failures stay attributable.
 name: Test Tools
 
 on:
@@ -51,3 +68,47 @@ jobs:
 
       - name: VersioningRunner tests
         run: dotnet test tools/VersioningRunner/src/VersioningRunner.Tests --nologo
+
+  # ComplianceRunner's own suite, including the entry-point characterisation tests. Needs
+  # CodeComplianceTest_oM.dll, so it builds the Test_Toolkit graph first. See the header.
+  compliance-tests:
+    name: ComplianceRunner tests
+    runs-on: windows-latest
+    # The hermetic job is 15. This one clones and builds Test_Toolkit's graph before it can
+    # compile anything, and the assembly cache is cold on a fresh branch (register item 28).
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Test_Toolkit is public, so github.token suffices and no App credentials are needed.
+      # resolve-dependencies builds with the SDK it is given; ComplianceRunner targets
+      # net10.0 and is published by the test host, so both versions are installed below.
+      - name: Resolve Test_Toolkit dependency graph
+        uses: ./.github/actions/resolve-dependencies
+        with:
+          mode: seeds
+          seeds: BHoM/Test_Toolkit
+          dotnet_version: '8.0'
+          configuration: Release
+          token: ${{ github.token }}
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5
+        with:
+          dotnet-version: '10.x'
+
+      # Fail loudly and specifically if the graph build did not produce the one assembly this
+      # job exists to obtain, rather than letting it surface as a bare CS0234 later.
+      - name: Assert CodeComplianceTest_oM is present
+        shell: pwsh
+        run: |
+          $dll = 'C:\ProgramData\BHoM\Assemblies\CodeComplianceTest_oM.dll'
+          if (-not (Test-Path $dll)) {
+            Write-Host "::error title=Test Tools::CodeComplianceTest_oM.dll absent after resolving BHoM/Test_Toolkit. Compliance.Tests cannot compile without it."
+            exit 1
+          }
+          Write-Host "::notice title=Test Tools::CodeComplianceTest_oM.dll present ($([int](Get-Item $dll).Length) bytes)."
+
+      - name: ComplianceRunner tests
+        run: dotnet test tools/ComplianceRunner/tests/Compliance.Tests --nologo
