@@ -1,0 +1,39 @@
+# SANDBOX-ONLY probe, not for merge. Runs the compliance-tests job on push so the
+# resolve-dependencies path and Compliance.Tests can be validated on a bare runner.
+name: probe-compliance-tests
+on:
+  push:
+    branches: [test/compliance-main-observable]
+permissions:
+  contents: read
+jobs:
+  compliance-tests:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Confirm bare runner
+        shell: pwsh
+        run: |
+          $p = 'C:\ProgramData\BHoM\Assemblies'
+          Write-Host "PROBE: BHoM dir exists before resolve = $(Test-Path $p)"
+      - name: Resolve Test_Toolkit dependency graph
+        uses: ./.github/actions/resolve-dependencies
+        with:
+          mode: seeds
+          seeds: BHoM/Test_Toolkit
+          dotnet_version: '8.0'
+          configuration: Release
+          token: ${{ github.token }}
+      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5
+        with:
+          dotnet-version: '10.x'
+      - name: Assert CodeComplianceTest_oM is present
+        shell: pwsh
+        run: |
+          $dll = 'C:\ProgramData\BHoM\Assemblies\CodeComplianceTest_oM.dll'
+          Write-Host "PROBE: CodeComplianceTest_oM present = $(Test-Path $dll)"
+          Write-Host "PROBE: total dlls = $((Get-ChildItem 'C:\ProgramData\BHoM\Assemblies' -Filter *.dll -EA SilentlyContinue).Count)"
+          if (-not (Test-Path $dll)) { exit 1 }
+      - name: ComplianceRunner tests
+        run: dotnet test tools/ComplianceRunner/tests/Compliance.Tests --nologo
