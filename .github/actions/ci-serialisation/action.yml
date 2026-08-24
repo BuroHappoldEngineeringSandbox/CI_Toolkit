@@ -198,6 +198,13 @@ runs:
         git checkout ${{ inputs.base_ref }}
         Remove-Item "C:\ProgramData\BHoM\Assemblies\*" -Recurse -Force -ErrorAction SilentlyContinue
 
+    # prefer_branch is what makes this a baseline. Without it the head branch is preferred on
+    # both legs, because resolve-dependencies takes PR_BRANCH from the event payload and that
+    # does not vary within a job. Every dependency carrying a branch of the same name as the
+    # pull request was therefore resolved to it twice, so the two legs shared dependency code
+    # and a regression on the dependency side cancelled out. Passing the base branch here, and
+    # re-resolving already-present clones in the resolver, are both required: either alone
+    # leaves the baseline on the branch leg's refs.
     - name: Resolve dependencies (baseline)
       if: steps.changed.outputs.count != '0' && steps.branch_run.outputs.status == 'Error'
       uses: BHoM/CI_Toolkit/.github/actions/resolve-dependencies@develop
@@ -206,6 +213,7 @@ runs:
         dotnet_version: ${{ inputs.dotnet_version }}
         configuration: Release
         token: ${{ steps.dep-token.outputs.token }}
+        prefer_branch: ${{ inputs.base_ref }}
         additional_seeds: |
           ${{ inputs.test_toolkit_repo }}
           ${{ inputs.serialisation_engine_repo }}

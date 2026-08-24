@@ -53,6 +53,21 @@ inputs:
     required: false
     default: ""
 
+  prefer_branch:
+    description: |
+      Branch to try first on every dependency, overriding the pull request's head branch.
+
+      Empty (the default) keeps the existing behaviour: prefer the PR head branch, which is
+      what a branch-leg build wants and is how cross-repo pull request pairs resolve.
+
+      Set this when a job resolves dependencies more than once and the passes mean different
+      things. ci-serialisation's baseline leg passes the base branch, because without it the
+      head branch is preferred on both legs: PR_BRANCH comes from the event payload, which
+      does not vary within a job, so the baseline leg had no way to ask for anything else.
+      An explicit owner/repo@ref in dependencies.txt still wins over this.
+    required: false
+    default: ""
+
 runs:
   using: "composite"
 
@@ -129,7 +144,10 @@ runs:
     - name: Resolve dependency graph
       shell: pwsh
       env:
-        PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+        # prefer_branch wins when supplied. The event payload is the default because it is
+        # right for every caller that resolves once; it is not overridable from inside the
+        # script, which is why the baseline leg needed an input rather than a code change.
+        PR_BRANCH: ${{ inputs.prefer_branch || github.event.pull_request.head.ref }}
         BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
         DEP_TOKEN: ${{ inputs.token }}
       run: |
