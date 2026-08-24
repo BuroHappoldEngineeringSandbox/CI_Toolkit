@@ -70,6 +70,9 @@ $nameMap    = @{}  # owner/repo -> folder
 $pathMap    = @{}  # owner/repo -> path
 $folderUsed = @{}  # folder name -> owner/repo, for collision detection
 
+# What each dependency resolved to, and what it was on before, for the no-op warning at the end.
+$resolutionLog = New-Object System.Collections.Generic.List[hashtable]
+
 # Use insteadOf to inject the token at the git config level — keeps it out of command
 # arguments, process listings, and cloned repos' .git/config. Removed in a finally block
 # to avoid persisting the credential on self-hosted runners even when the script errors.
@@ -214,6 +217,8 @@ function Clone-And-Checkout([string]$ownerRepo, [string]$ref) {
     } else {
         Write-Host "Dependency checkout: $ownerRepo -> $selectedRef @ $($sha.Substring(0,7))"
     }
+
+    $resolutionLog.Add(@{ Key = $ownerRepo; Previous = $previousRef; Selected = $selectedRef }) | Out-Null
 
     $nameMap[$ownerRepo] = $name
     $pathMap[$ownerRepo] = $path
@@ -370,6 +375,32 @@ if (Test-Path $selectFile) {
 
     if ($env:GITHUB_STEP_SUMMARY) {
         $mdLines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+    }
+}
+
+# A repeat invocation that changed nothing is the shape of register item 4: two passes meant to
+# mean different things resolving to the same dependency code, so a regression on the dependency
+# side appears in both and cancels out. Only reachable on a repeat invocation, because a first
+# pass has nothing to compare against.
+#
+# WARNING, not an error, and it must stay that way. Same-refs is legitimate and common: it is
+# what happens whenever the pull request's branch name exists on no dependency, which is most
+# pull requests. Failing here would red every one of them. The point is that a reader of a
+# baseline leg can see which case they are in without reconstructing it from two logs.
+$repeated = @($resolutionLog | Where-Object { $_.Previous })
+if ($repeated.Count -gt 0) {
+    $moved = @($repeated | Where-Object { $_.Previous -ne $_.Selected })
+    if ($moved.Count -eq 0) {
+        Write-Host ("::warning title=resolve-dependencies::Repeat resolution changed nothing: all " +
+                    "$($repeated.Count) already-present dependenc(ies) stayed on the ref the previous " +
+                    "invocation selected. Expected when the requested branch exists on no dependency. " +
+                    "If this is a baseline pass that was meant to differ from its branch pass, the two " +
+                    "are sharing dependency code and any regression in it will cancel out (register item 4). " +
+                    "Check prefer_branch is set and names a branch that exists.")
+    } else {
+        Write-Host ("::notice title=resolve-dependencies::Repeat resolution moved " +
+                    "$($moved.Count) of $($repeated.Count) already-present dependenc(ies): " +
+                    (($moved | ForEach-Object { "$($_.Key) $($_.Previous)->$($_.Selected)" }) -join ', '))
     }
 }
 

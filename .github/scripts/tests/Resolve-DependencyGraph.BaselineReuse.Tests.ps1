@@ -98,7 +98,10 @@ BeforeAll {
             [string]$Workspace,
             [string]$CloneRoot,
             [AllowNull()][string]$Prefer,
-            [string]$Fallback
+            [string]$Fallback,
+            # Return the script's host output instead of discarding it, for the tests that
+            # assert on the workflow-command lines it emits.
+            [switch]$Capture
         )
 
         New-Item -ItemType Directory -Force -Path (Join-Path $Workspace 'deps') | Out-Null
@@ -110,6 +113,10 @@ BeforeAll {
 
         Push-Location $Workspace
         try {
+            if ($Capture) {
+                return @(& $resolver -DepsFile 'dependencies.txt' -Mode 'caller' -Seeds '' `
+                                     -AdditionalSeeds '' -CloneRoot $CloneRoot 6>&1)
+            }
             & $resolver -DepsFile 'dependencies.txt' -Mode 'caller' -Seeds '' `
                         -AdditionalSeeds '' -CloneRoot $CloneRoot | Out-Null
         }
@@ -314,6 +321,41 @@ Describe 'ci-serialisation baseline reuse (register item 4)' {
             Invoke-Resolver -Workspace $ws -CloneRoot $root -Prefer 'develop' -Fallback 'develop'
             (Get-Content $marker -Raw) | Should -Match ([regex]::Escape('Dep|develop'))
             (Get-Content $marker -Raw) | Should -Not -Match ([regex]::Escape($prefer))
+        }
+
+        # The guard for the residual risk in the fix: prefer_branch has one caller, and a second
+        # caller passing a ref that does not exist gets a silently correct-looking baseline built
+        # on the branch leg's dependency code. Warning only, deliberately: same-refs is the
+        # common and legitimate case whenever the pull request branch exists on no dependency.
+        It 'warns when a repeat resolution changed nothing' {
+            $ws   = New-Workspace -Name 'guard-ws'   -Dependency $dep
+            $root = Join-Path $sandbox 'guard-clones'
+
+            Invoke-Resolver -Workspace $ws -CloneRoot $root -Prefer $prefer -Fallback 'develop'
+            $second = Invoke-Resolver -Workspace $ws -CloneRoot $root -Prefer $prefer -Fallback 'develop' -Capture
+
+            ($second -join "`n") | Should -Match 'Repeat resolution changed nothing'
+            ($second -join "`n") | Should -Match 'register item 4'
+        }
+
+        It 'does not warn on a first invocation, which has nothing to compare against' {
+            $ws   = New-Workspace -Name 'guard2-ws'   -Dependency $dep
+            $root = Join-Path $sandbox 'guard2-clones'
+
+            $first = Invoke-Resolver -Workspace $ws -CloneRoot $root -Prefer $prefer -Fallback 'develop' -Capture
+
+            ($first -join "`n") | Should -Not -Match 'Repeat resolution changed nothing'
+        }
+
+        It 'reports a notice, not a warning, when a repeat resolution did move' {
+            $ws   = New-Workspace -Name 'guard3-ws'   -Dependency $dep
+            $root = Join-Path $sandbox 'guard3-clones'
+
+            Invoke-Resolver -Workspace $ws -CloneRoot $root -Prefer $prefer -Fallback 'develop'
+            $second = Invoke-Resolver -Workspace $ws -CloneRoot $root -Prefer 'develop' -Fallback 'develop' -Capture
+
+            ($second -join "`n") | Should -Match 'Repeat resolution moved 1 of 1'
+            ($second -join "`n") | Should -Not -Match 'Repeat resolution changed nothing'
         }
 
         It 'keeps the marker file out of the directories the caller junctions' {
