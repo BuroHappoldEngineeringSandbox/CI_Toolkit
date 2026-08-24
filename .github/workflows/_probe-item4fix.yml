@@ -1,0 +1,76 @@
+# SANDBOX-ONLY probe, not for merge. Pester suite plus a real two-invocation
+# resolve-dependencies wiring check for the prefer_branch input.
+name: probe-item4fix
+on:
+  push:
+    branches: [fix/serialisation-baseline-dependency-refs]
+permissions:
+  contents: read
+jobs:
+  pester:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install Pester
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version.Major -eq 5 })) {
+            Install-Module Pester -MinimumVersion 5.5.0 -MaximumVersion 5.99.99 -Scope CurrentUser -Force -SkipPublisherCheck
+          }
+      - name: Run full Pester suite
+        shell: pwsh
+        run: |
+          Import-Module Pester -MinimumVersion 5.5.0 -MaximumVersion 5.99.99
+          $r = Invoke-Pester -Path .github/scripts/tests -Output Detailed -PassThru
+          Write-Host "RESULT passed=$($r.PassedCount) failed=$($r.FailedCount)"
+          if ($r.FailedCount -gt 0) { exit 1 }
+
+  wiring:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Cache state before
+        shell: pwsh
+        run: |
+          Write-Host "PROBE BHoM dir exists = $(Test-Path 'C:\ProgramData\BHoM\Assemblies')"
+          Write-Host "PROBE bhom-deps exists = $(Test-Path 'C:\bhom-deps')"
+
+      # Leg A: prefer the head branch, as a branch leg does.
+      - name: Resolve (leg A, default prefer)
+        uses: ./.github/actions/resolve-dependencies
+        with:
+          mode: seeds
+          seeds: BHoM/Test_Toolkit
+          dotnet_version: '8.0'
+          configuration: Release
+          token: ${{ github.token }}
+
+      - name: Record leg A refs
+        shell: pwsh
+        run: |
+          Write-Host "=== leg A selected refs ==="
+          Get-Content 'C:\bhom-deps\_selected-refs.txt'
+          Copy-Item 'C:\bhom-deps\_selected-refs.txt' "$env:RUNNER_TEMP\legA.txt"
+
+      # Leg B: same job, second invocation, explicitly preferring a different ref.
+      - name: Resolve (leg B, prefer_branch=main)
+        uses: ./.github/actions/resolve-dependencies
+        with:
+          mode: seeds
+          seeds: BHoM/Test_Toolkit
+          dotnet_version: '8.0'
+          configuration: Release
+          token: ${{ github.token }}
+          prefer_branch: main
+
+      - name: Compare legs
+        shell: pwsh
+        run: |
+          Write-Host "=== leg B selected refs ==="
+          Get-Content 'C:\bhom-deps\_selected-refs.txt'
+          Write-Host "=== leg A was ==="
+          Get-Content "$env:RUNNER_TEMP\legA.txt"
+          Write-Host "=== deps/_selection.txt after leg B (was empty before the fix) ==="
+          Get-Content 'deps/_selection.txt'
