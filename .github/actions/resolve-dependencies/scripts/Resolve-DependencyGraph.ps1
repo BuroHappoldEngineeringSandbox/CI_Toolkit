@@ -16,6 +16,13 @@ $shaFile    = Join-Path $depsDir "_shas.txt"
 $orderOut   = Join-Path $depsDir "_order.txt"
 $selectFile = Join-Path $depsDir "_selection.txt"
 
+# Which ref each clone was last checked out to, kept beside the clones rather than in deps/
+# because the action truncates _shas.txt and deletes _selection.txt on every invocation while
+# the clone root persists for the whole job. A flat file, not a directory: the junction loop at
+# the end of the calling action enumerates directories under the clone root and would otherwise
+# link this into the workspace parent as if it were a dependency.
+$refMarkerFile = Join-Path $cloneRoot "_selected-refs.txt"
+
 New-Item -ItemType Directory -Force -Path $cloneRoot | Out-Null
 
 if (Test-Path $selectFile) { Remove-Item $selectFile -Force }
@@ -83,6 +90,28 @@ function Get-FolderName([string]$ownerRepo) {
     return $name
 }
 
+# A detached HEAD cannot report the branch it came from, so the ref each clone was checked out
+# to is recorded here and read back on a later invocation. Without it a reused clone can only be
+# described by its SHA, which does not tell a reader whether the ref was the one this leg asked
+# for. See the reporting note on the reuse path in Clone-And-Checkout.
+function Set-SelectedRefMarker([string]$name, [string]$ref) {
+    $kept = @()
+    if (Test-Path $refMarkerFile) {
+        $kept = @(Get-Content $refMarkerFile |
+                  Where-Object { $_ -notmatch "^$([regex]::Escape($name))\|" })
+    }
+    ($kept + "$name|$ref") | Set-Content -Path $refMarkerFile -Encoding utf8
+}
+
+function Get-SelectedRefMarker([string]$name) {
+    if (-not (Test-Path $refMarkerFile)) { return $null }
+    $line = Get-Content $refMarkerFile |
+            Where-Object { $_ -match "^$([regex]::Escape($name))\|" } |
+            Select-Object -First 1
+    if (-not $line) { return $null }
+    return $line.Split('|', 2)[1]
+}
+
 function Clone-And-Checkout([string]$ownerRepo, [string]$ref) {
 
     $name = Get-FolderName $ownerRepo
@@ -140,6 +169,7 @@ function Clone-And-Checkout([string]$ownerRepo, [string]$ref) {
             $sha = (git rev-parse HEAD).Trim()
             Add-Content -Path $shaFile    -Value "$ownerRepo $sha"
             Add-Content -Path $selectFile -Value "$ownerRepo|$name|$selectedRef|$sha"
+            Set-SelectedRefMarker $name $selectedRef
         }
         finally {
             Pop-Location
@@ -162,6 +192,18 @@ function Clone-And-Checkout([string]$ownerRepo, [string]$ref) {
         try {
             $sha = (git rev-parse HEAD).Trim()
             Add-Content -Path $shaFile -Value "$ownerRepo $sha"
+
+            # Report the reuse rather than staying silent about it. _selection.txt is deleted on
+            # every invocation and was previously written only when a clone was created, so a
+            # second invocation in the same job produced no selection table at all and its log
+            # said nothing about which refs it was actually building. That silence is what let
+            # ci-serialisation's baseline leg look like it had resolved its own dependencies.
+            # The ref comes from the marker because HEAD here is detached at FETCH_HEAD and
+            # cannot name the branch it came from.
+            $reusedRef = Get-SelectedRefMarker $name
+            if (-not $reusedRef) { $reusedRef = "(unrecorded)" }
+            Add-Content -Path $selectFile -Value "$ownerRepo|$name|$reusedRef (reused)|$sha"
+            Write-Host "Dependency reused: $ownerRepo -> $reusedRef @ $($sha.Substring(0,7)) (clone already present, not re-resolved)"
         }
         finally {
             Pop-Location
