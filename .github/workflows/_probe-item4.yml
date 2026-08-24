@@ -1,0 +1,26 @@
+# SANDBOX-ONLY probe, not for merge.
+name: probe-item4
+on:
+  push:
+    branches: [investigate/serialisation-baseline]
+permissions:
+  contents: read
+jobs:
+  pester:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install Pester
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version.Major -eq 5 })) {
+            Install-Module Pester -MinimumVersion 5.5.0 -MaximumVersion 5.99.99 -Scope CurrentUser -Force -SkipPublisherCheck
+          }
+      - name: Run Pester suite
+        shell: pwsh
+        run: |
+          Import-Module Pester -MinimumVersion 5.5.0 -MaximumVersion 5.99.99
+          $r = Invoke-Pester -Path .github/scripts/tests -Output Detailed -PassThru
+          Write-Host "RESULT passed=$($r.PassedCount) failed=$($r.FailedCount)"
+          if ($r.FailedCount -gt 0) { exit 1 }
