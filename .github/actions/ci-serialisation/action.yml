@@ -65,7 +65,7 @@ runs:
 
     - name: Compute changed files
       id: changed
-      uses: BHoM/CI_Toolkit/.github/actions/compute-changed-files@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/compute-changed-files@validate/item4-integration
       with:
         # AssemblyInfo.cs is excluded to match BHoMBot's serialisation gate
         # (Serialisation.cs:35). A version bump cannot change the verdict: the
@@ -79,7 +79,7 @@ runs:
     - name: Mint dependency token
       id: dep-token
       if: steps.changed.outputs.count != '0'
-      uses: BHoM/CI_Toolkit/.github/actions/mint-dep-token@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/mint-dep-token@validate/item4-integration
       with:
         app_id:         ${{ inputs.app_id }}
         private_key:    ${{ inputs.private_key }}
@@ -90,7 +90,7 @@ runs:
     - name: Resolve dependencies (branch)
       id: deps_branch
       if: steps.changed.outputs.count != '0'
-      uses: BHoM/CI_Toolkit/.github/actions/resolve-dependencies@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/resolve-dependencies@validate/item4-integration
       with:
         mode: caller
         dotnet_version: ${{ inputs.dotnet_version }}
@@ -103,7 +103,7 @@ runs:
     - name: Discover primary solution
       id: solution
       if: steps.changed.outputs.count != '0'
-      uses: BHoM/CI_Toolkit/.github/actions/discover-solution@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/discover-solution@validate/item4-integration
       with:
         check_title: Serialisation
 
@@ -145,7 +145,7 @@ runs:
     - name: Infer Verification.sln build configuration
       id: ver_config
       if: steps.changed.outputs.count != '0'
-      uses: BHoM/CI_Toolkit/.github/actions/infer-verification-config@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/infer-verification-config@validate/item4-integration
       with:
         sln_path: ${{ steps.ver_sln.outputs.path }}
 
@@ -159,7 +159,7 @@ runs:
     - name: Prepare SerialiserRunner
       id: runner
       if: steps.changed.outputs.count != '0'
-      uses: BHoM/CI_Toolkit/.github/actions/prepare-runner@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/prepare-runner@validate/item4-integration
       with:
         runner_project: tools/SerialiserRunner/src/SerialiserRunner/SerialiserRunner.csproj
         output_dir: out\serialiser-runner
@@ -207,7 +207,7 @@ runs:
     # leaves the baseline on the branch leg's refs.
     - name: Resolve dependencies (baseline)
       if: steps.changed.outputs.count != '0' && steps.branch_run.outputs.status == 'Error'
-      uses: BHoM/CI_Toolkit/.github/actions/resolve-dependencies@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/resolve-dependencies@validate/item4-integration
       with:
         mode: caller
         dotnet_version: ${{ inputs.dotnet_version }}
@@ -231,7 +231,7 @@ runs:
     - name: Infer Verification.sln build configuration (baseline)
       id: ver_config_baseline
       if: steps.changed.outputs.count != '0' && steps.branch_run.outputs.status == 'Error'
-      uses: BHoM/CI_Toolkit/.github/actions/infer-verification-config@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/infer-verification-config@validate/item4-integration
       with:
         sln_path: ${{ steps.ver_sln.outputs.path }}
 

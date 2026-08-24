@@ -58,7 +58,7 @@ runs:
     # fixtures.
     - name: Compute changed source files
       id: changed-cs
-      uses: BHoM/CI_Toolkit/.github/actions/compute-changed-files@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/compute-changed-files@validate/item4-integration
       with:
         patterns: '*.cs *.csproj *.sln *.props *.targets'
         skip_if_not_pr: 'false'
@@ -75,7 +75,7 @@ runs:
     # '*' matches '/' in git pathspecs, so a single '*' spans nested directories.
     - name: Compute changed dataset files
       id: changed-datasets
-      uses: BHoM/CI_Toolkit/.github/actions/compute-changed-files@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/compute-changed-files@validate/item4-integration
       with:
         patterns: ':(icase).ci/Datasets/*.json'
         output_file: changed_datasets.txt
@@ -127,7 +127,7 @@ runs:
     - name: Mint dependency token
       id: dep-token
       if: steps.scope.outputs.count != '0'
-      uses: BHoM/CI_Toolkit/.github/actions/mint-dep-token@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/mint-dep-token@validate/item4-integration
       with:
         app_id:         ${{ inputs.app_id }}
         private_key:    ${{ inputs.private_key }}
@@ -135,7 +135,7 @@ runs:
 
     - name: Resolve dependencies
       if: steps.scope.outputs.count != '0'
-      uses: BHoM/CI_Toolkit/.github/actions/resolve-dependencies@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/resolve-dependencies@validate/item4-integration
       with:
         mode:             caller
         additional_seeds: |
@@ -152,7 +152,7 @@ runs:
     - name: Discover primary solution
       id: solution
       if: steps.scope.outputs.count != '0'
-      uses: BHoM/CI_Toolkit/.github/actions/discover-solution@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/discover-solution@validate/item4-integration
       with:
         check_title: DatasetTests
 
@@ -180,7 +180,7 @@ runs:
     - name: Prepare runner
       if: steps.scope.outputs.count != '0'
       id: runner
-      uses: BHoM/CI_Toolkit/.github/actions/prepare-runner@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/prepare-runner@validate/item4-integration
       with:
         runner_project: tools/ComplianceRunner/src/DatasetTestRunner/DatasetTestRunner.csproj
         output_dir:     out\runner
