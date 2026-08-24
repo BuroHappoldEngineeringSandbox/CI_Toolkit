@@ -383,24 +383,41 @@ if (Test-Path $selectFile) {
 # side appears in both and cancels out. Only reachable on a repeat invocation, because a first
 # pass has nothing to compare against.
 #
-# WARNING, not an error, and it must stay that way. Same-refs is legitimate and common: it is
-# what happens whenever the pull request's branch name exists on no dependency, which is most
-# pull requests. Failing here would red every one of them. The point is that a reader of a
-# baseline leg can see which case they are in without reconstructing it from two logs.
+# The annotation level depends on WHO asked, which is why PREFER_BRANCH_EXPLICIT exists.
+#
+#   explicit prefer_branch + nothing moved  ->  ::warning. A caller deliberately asked for a
+#       different ref and got the same one, so either the branch does not exist anywhere in the
+#       closure or the value is wrong. This is the misconfiguration worth interrupting for.
+#   something moved                         ->  ::notice naming the moves. The normal baseline.
+#   inherited default + nothing moved       ->  plain log line, no annotation. This is the
+#       ordinary case: the pull request branch exists on no dependency, so both passes
+#       legitimately resolve to the base branch. An earlier version warned here and would have
+#       fired on most baseline runs, which is worse than not warning at all.
+#
+# Never an error. Failing on same-refs would red every pull request whose branch name exists on
+# no dependency, which is most of them.
 $repeated = @($resolutionLog | Where-Object { $_.Previous })
 if ($repeated.Count -gt 0) {
-    $moved = @($repeated | Where-Object { $_.Previous -ne $_.Selected })
-    if ($moved.Count -eq 0) {
-        Write-Host ("::warning title=resolve-dependencies::Repeat resolution changed nothing: all " +
-                    "$($repeated.Count) already-present dependenc(ies) stayed on the ref the previous " +
-                    "invocation selected. Expected when the requested branch exists on no dependency. " +
-                    "If this is a baseline pass that was meant to differ from its branch pass, the two " +
-                    "are sharing dependency code and any regression in it will cancel out (register item 4). " +
-                    "Check prefer_branch is set and names a branch that exists.")
-    } else {
+    $moved       = @($repeated | Where-Object { $_.Previous -ne $_.Selected })
+    $wasExplicit = $env:PREFER_BRANCH_EXPLICIT -eq 'true'
+
+    if ($moved.Count -gt 0) {
         Write-Host ("::notice title=resolve-dependencies::Repeat resolution moved " +
                     "$($moved.Count) of $($repeated.Count) already-present dependenc(ies): " +
                     (($moved | ForEach-Object { "$($_.Key) $($_.Previous)->$($_.Selected)" }) -join ', '))
+    }
+    elseif ($wasExplicit) {
+        Write-Host ("::warning title=resolve-dependencies::prefer_branch was set explicitly to " +
+                    "'$Prefer' but no dependency moved: all $($repeated.Count) already-present " +
+                    "dependenc(ies) stayed on the ref the previous invocation selected. Either that " +
+                    "branch exists on none of them, which is expected and harmless, or the value is " +
+                    "wrong and this pass is sharing dependency code with the previous one, in which " +
+                    "case a regression in that code cancels out (register item 4).")
+    }
+    else {
+        Write-Host ("Repeat resolution changed nothing: all $($repeated.Count) already-present " +
+                    "dependenc(ies) stayed on '$Prefer', which was inherited from the event rather " +
+                    "than requested. Ordinary for a pull request whose branch exists on no dependency.")
     }
 }
 

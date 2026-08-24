@@ -149,6 +149,12 @@ runs:
         # script, which is why the baseline leg needed an input rather than a code change.
         PR_BRANCH: ${{ inputs.prefer_branch || github.event.pull_request.head.ref }}
         BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+        # Whether PR_BRANCH came from the input or from the event. The script cannot tell
+        # from the value alone, and the two mean different things on a repeat invocation:
+        # an explicit request that changed nothing is a misconfiguration, an inherited
+        # default that changed nothing is the ordinary case. See the no-op check at the end
+        # of Resolve-DependencyGraph.ps1.
+        PREFER_BRANCH_EXPLICIT: ${{ inputs.prefer_branch != '' }}
         DEP_TOKEN: ${{ inputs.token }}
       run: |
         $script = Join-Path $env:GITHUB_ACTION_PATH "scripts/Resolve-DependencyGraph.ps1"

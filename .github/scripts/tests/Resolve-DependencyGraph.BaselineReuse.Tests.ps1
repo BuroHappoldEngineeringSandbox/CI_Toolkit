@@ -101,15 +101,19 @@ BeforeAll {
             [string]$Fallback,
             # Return the script's host output instead of discarding it, for the tests that
             # assert on the workflow-command lines it emits.
-            [switch]$Capture
+            [switch]$Capture,
+            # Mirrors resolve-dependencies/action.yml's PREFER_BRANCH_EXPLICIT: whether
+            # PR_BRANCH came from the prefer_branch input or from the event payload.
+            [switch]$Explicit
         )
 
         New-Item -ItemType Directory -Force -Path (Join-Path $Workspace 'deps') | Out-Null
         New-Item -ItemType File -Force -Path (Join-Path $Workspace 'deps/_shas.txt') | Out-Null
 
-        $env:PR_BRANCH   = $Prefer
-        $env:BASE_BRANCH = $Fallback
-        $env:DEP_TOKEN   = ''
+        $env:PR_BRANCH              = $Prefer
+        $env:BASE_BRANCH            = $Fallback
+        $env:DEP_TOKEN              = ''
+        $env:PREFER_BRANCH_EXPLICIT = if ($Explicit) { 'true' } else { 'false' }
 
         Push-Location $Workspace
         try {
@@ -323,28 +327,42 @@ Describe 'ci-serialisation baseline reuse (register item 4)' {
             (Get-Content $marker -Raw) | Should -Not -Match ([regex]::Escape($prefer))
         }
 
-        # The guard for the residual risk in the fix: prefer_branch has one caller, and a second
-        # caller passing a ref that does not exist gets a silently correct-looking baseline built
-        # on the branch leg's dependency code. Warning only, deliberately: same-refs is the
-        # common and legitimate case whenever the pull request branch exists on no dependency.
-        It 'warns when a repeat resolution changed nothing' {
+        # The guard distinguishes who asked. An explicit prefer_branch that moved nothing is a
+        # misconfiguration worth annotating; the same outcome from an inherited event default is
+        # the ordinary case and must not annotate, because it happens on most baseline runs.
+        # Never an error either way.
+        It 'warns when prefer_branch was explicit and nothing moved' {
             $ws   = New-Workspace -Name 'guard-ws'   -Dependency $dep
             $root = Join-Path $sandbox 'guard-clones'
 
             Invoke-Resolver -Workspace $ws -CloneRoot $root -Prefer $prefer -Fallback 'develop'
+            $second = Invoke-Resolver -Workspace $ws -CloneRoot $root -Prefer $prefer -Fallback 'develop' -Explicit -Capture
+
+            ($second -join "`n") | Should -Match '::warning title=resolve-dependencies::prefer_branch was set explicitly'
+            ($second -join "`n") | Should -Match 'register item 4'
+        }
+
+        It 'stays silent, with no annotation, when the default was inherited and nothing moved' {
+            $ws   = New-Workspace -Name 'guard1b-ws'   -Dependency $dep
+            $root = Join-Path $sandbox 'guard1b-clones'
+
+            Invoke-Resolver -Workspace $ws -CloneRoot $root -Prefer $prefer -Fallback 'develop'
             $second = Invoke-Resolver -Workspace $ws -CloneRoot $root -Prefer $prefer -Fallback 'develop' -Capture
 
-            ($second -join "`n") | Should -Match 'Repeat resolution changed nothing'
-            ($second -join "`n") | Should -Match 'register item 4'
+            # The case that made the first version of this guard useless: it fired here, which is
+            # most baseline runs. Informational only now.
+            ($second -join "`n") | Should -Not -Match '::warning'
+            ($second -join "`n") | Should -Match 'inherited from the event rather than requested'
         }
 
         It 'does not warn on a first invocation, which has nothing to compare against' {
             $ws   = New-Workspace -Name 'guard2-ws'   -Dependency $dep
             $root = Join-Path $sandbox 'guard2-clones'
 
-            $first = Invoke-Resolver -Workspace $ws -CloneRoot $root -Prefer $prefer -Fallback 'develop' -Capture
+            $first = Invoke-Resolver -Workspace $ws -CloneRoot $root -Prefer $prefer -Fallback 'develop' -Explicit -Capture
 
-            ($first -join "`n") | Should -Not -Match 'Repeat resolution changed nothing'
+            ($first -join "`n") | Should -Not -Match '::warning'
+            ($first -join "`n") | Should -Not -Match 'Repeat resolution'
         }
 
         It 'reports a notice, not a warning, when a repeat resolution did move' {
@@ -352,10 +370,10 @@ Describe 'ci-serialisation baseline reuse (register item 4)' {
             $root = Join-Path $sandbox 'guard3-clones'
 
             Invoke-Resolver -Workspace $ws -CloneRoot $root -Prefer $prefer -Fallback 'develop'
-            $second = Invoke-Resolver -Workspace $ws -CloneRoot $root -Prefer 'develop' -Fallback 'develop' -Capture
+            $second = Invoke-Resolver -Workspace $ws -CloneRoot $root -Prefer 'develop' -Fallback 'develop' -Explicit -Capture
 
             ($second -join "`n") | Should -Match 'Repeat resolution moved 1 of 1'
-            ($second -join "`n") | Should -Not -Match 'Repeat resolution changed nothing'
+            ($second -join "`n") | Should -Not -Match '::warning'
         }
 
         It 'keeps the marker file out of the directories the caller junctions' {
