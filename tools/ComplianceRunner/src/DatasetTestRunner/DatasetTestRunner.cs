@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
 using BH.Engine.Test;                   // Modify.Merge
 using BH.Engine.UnitTest;               // CheckTest extension method
 using BH.oM.Test;                       // TestStatus
@@ -37,12 +36,18 @@ class DatasetTestRunner
         var mergedResult   = new TestResult() { Status = TestStatus.Pass, Information = new List<ITestInformation>() };
         var allAnnotations = new List<Annotation>();
 
+        // Three of FileAccounting's four exits. This runner applies no relevance filter — the
+        // action hands it the fixtures it already selected — so NotRelevant stays zero and the
+        // denominator reads as examined / handed in.
+        var accounting = new FileAccounting(files.Count);
+
         foreach (var file in files)
         {
             if (verbose) Console.WriteLine($"\n=== Running: {file} ===");
 
             if (!File.Exists(file))
             {
+                accounting.CountNotOnDisk();
                 Console.WriteLine($"  [SKIP] File not found: {file}");
                 continue;
             }
@@ -51,12 +56,14 @@ class DatasetTestRunner
 
             if (result == null)
             {
+                accounting.CountNoResult();
                 Console.WriteLine($"  [SKIP] No result returned for: {file}");
                 continue;
             }
 
             if (verbose) Console.WriteLine($"  Result Status: {result.Status}");
 
+            accounting.CountExamined();
             mergedResult = mergedResult.Merge(result);
 
             var information        = (result.Information ?? Enumerable.Empty<ITestInformation>())
@@ -86,73 +93,29 @@ class DatasetTestRunner
         }
 
         const string checkType = "dataset-tests";
-        CheckMetadata.GetOutput(checkType, mergedResult.Status,
-                                out string title, out string summary, out string text);
 
-        if (verbose)
-        {
-            if (mergedResult.Status == TestStatus.Error || mergedResult.Status == TestStatus.Warning)
-            {
-                Console.WriteLine("\n--- Check output ---");
-                Console.WriteLine($"Title:   {title}");
-                Console.WriteLine($"Summary: {summary}");
-                if (!string.IsNullOrEmpty(text)) Console.WriteLine($"Text:    {text}");
-            }
-            Console.WriteLine("\n===============================");
-            Console.WriteLine($"FINAL RESULT: {mergedResult.Status} (Annotations: {allAnnotations.Count})");
-            Console.WriteLine("===============================");
-        }
-
-        if (outputFormat == "github")
-        {
-            foreach (var a in allAnnotations)
-            {
-                var path  = PathHelper.NormaliseAnnotationPath(a.FilePath);
-                var level = a.Level == "failure" ? "error" : "warning";
-                var msg   = a.Message.Replace("\r", "").Replace("\n", " ");
-                var col   = a.ColumnStart > 0 ? $",col={a.ColumnStart}" : "";
-                Console.WriteLine($"::{level} file={path},line={a.LineStart}{col}::{msg}");
-            }
-        }
-        else if (outputFormat == "json")
-        {
-            var payload = new Dictionary<string, object>
-            {
-                ["status"]          = mergedResult.Status.ToString(),
-                ["checkType"]       = checkType,
-                ["title"]           = title,
-                ["summary"]         = summary,
-                ["text"]            = text,
-                ["annotationCount"] = allAnnotations.Count,
-                ["annotations"]     = allAnnotations.Select(a => new Dictionary<string, object>
-                {
-                    ["path"]             = a.FilePath,
-                    ["lineStart"]        = a.LineStart,
-                    ["lineEnd"]          = a.LineEnd,
-                    ["columnStart"]      = a.ColumnStart,
-                    ["columnEnd"]        = a.ColumnEnd,
-                    ["level"]            = a.Level,
-                    ["message"]          = a.Message,
-                    ["ruleName"]         = a.RuleName,
-                    ["documentationUrl"] = a.DocumentationUrl,
-                    ["bhomGuid"]         = a.BHoMGuid,
-                    ["utcTime"]          = a.UTCTime.ToString("o")
-                }).ToList()
-            };
-            Console.WriteLine(JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = false }));
-        }
-        else if (outputFormat == "sarif" || outputFormat == "sarif-file")
-        {
-            var sarif = SarifBuilder.Build(checkType, title, allAnnotations,
-                             BH.Engine.Base.Query.DocumentationURL("DevOps/Code%20Compliance%20and%20CI/Compliance%20Checks/"));
-            if (outputFormat == "sarif-file" && !string.IsNullOrEmpty(sarifFilePath))
-            {
-                File.WriteAllText(sarifFilePath, sarif);
-                if (verbose) Console.WriteLine($"SARIF written to {sarifFilePath}");
-            }
-            else
-                Console.WriteLine(sarif);
-        }
+        // Routed through the shared emitter rather than a local copy. The copy that stood here
+        // had drifted from OutputEmitter in three ways, all of them silent:
+        //   - it omitted title= and the location prefix on the message, which is the workaround
+        //     OutputEmitter documents for GitHub stripping file= out of the rendered log line.
+        //     Measured: the annotation anchored correctly and the log line carried no path at
+        //     all, so a failing fixture named nothing a reader could act on.
+        //   - it mapped every non-failure level to warning, so a notice was reported as a
+        //     warning.
+        //   - it flattened newlines to spaces instead of %0A, so a nested result hierarchy
+        //     arrived as one long line.
+        // Passing accounting also gives this runner the coverage denominator the other four
+        // already report. Verdict is unchanged: the exit code below is untouched, and Write
+        // reports rather than decides.
+        OutputEmitter.Write(
+            outputFormat,
+            checkType,
+            mergedResult.Status,
+            allAnnotations,
+            sarifFilePath,
+            verbose,
+            BH.Engine.Base.Query.DocumentationURL("DevOps/Code%20Compliance%20and%20CI/Compliance%20Checks/"),
+            accounting);
 
         return mergedResult.Status == TestStatus.Error ? 1 : 0;
     }
