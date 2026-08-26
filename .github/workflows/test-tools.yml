@@ -126,6 +126,34 @@ jobs:
           }
           Write-Host "::notice title=Test Tools::CodeComplianceTest_oM.dll present ($([int](Get-Item $dll).Length) bytes)."
 
+      # TEMPORARY PROBE, not for merge. Establishes whether the four assemblies
+      # DatasetTestRunner.csproj HintPaths beyond Compliance.Shared's five are present once
+      # the Test_Toolkit graph has resolved. Report-only so one run yields the whole picture
+      # instead of stopping at the first absence.
+      - name: PROBE HintPath presence
+        shell: pwsh
+        run: |
+          $asm = 'C:\ProgramData\BHoM\Assemblies'
+          $all = @(Get-ChildItem $asm -Filter *.dll -ErrorAction SilentlyContinue)
+          Write-Host "PROBE-COUNT: $($all.Count) assembl(ies) in $asm"
+          $all.Name | Sort-Object | ForEach-Object { Write-Host "PROBE-ALL: $_" }
+          $needed = @('Data_oM','Serialiser_Engine','UnitTest_Engine','UnitTest_oM',
+                      'BHoM','BHoM_Engine','Test_Engine','Test_oM','CodeComplianceTest_oM')
+          foreach ($n in $needed) {
+            $p = Join-Path $asm "$n.dll"
+            if (Test-Path $p) { Write-Host "PROBE-HINT: PRESENT $n ($([int](Get-Item $p).Length) bytes)" }
+            else              { Write-Host "PROBE-HINT: ABSENT  $n" }
+          }
+
+      # The decisive measurement: file presence is not the same as the reference resolving.
+      # continue-on-error so a failure here reports rather than reds the job.
+      - name: PROBE build DatasetTestRunner
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          dotnet build tools/ComplianceRunner/src/DatasetTestRunner/DatasetTestRunner.csproj -c Debug --nologo
+          Write-Host "PROBE-BUILD-EXIT: $LASTEXITCODE"
+
       # RunnerFixture invokes the runners with `dotnet run --no-build`, so their output must
       # already exist. `dotnet test` does not produce it: Compliance.Tests has no
       # ProjectReference to either executable project, so only Compliance.Shared and the test
