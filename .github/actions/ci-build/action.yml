@@ -28,7 +28,7 @@ runs:
 
     - name: Compute changed files
       id: changed
-      uses: BHoM/CI_Toolkit/.github/actions/compute-changed-files@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/compute-changed-files@validate/altconfig-widening
       with:
         # :(exclude)*AssemblyInfo.cs matches ci-versioning and ci-serialisation, and
         # matches what BHoMBot's core check did (Checks/Core.cs:30).
@@ -53,7 +53,7 @@ runs:
     - name: Mint dependency token
       id: dep-token
       if: steps.changed.outputs.count != '0'
-      uses: BHoM/CI_Toolkit/.github/actions/mint-dep-token@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/mint-dep-token@validate/altconfig-widening
       with:
         app_id:         ${{ inputs.app_id }}
         private_key:    ${{ inputs.private_key }}
@@ -61,7 +61,7 @@ runs:
 
     - name: Resolve dependencies
       if: steps.changed.outputs.count != '0'
-      uses: BHoM/CI_Toolkit/.github/actions/resolve-dependencies@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/resolve-dependencies@validate/altconfig-widening
       with:
         mode: caller
         dotnet_version: '8.0'
@@ -71,7 +71,7 @@ runs:
     - name: Discover primary solution
       id: solution
       if: steps.changed.outputs.count != '0'
-      uses: BHoM/CI_Toolkit/.github/actions/discover-solution@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/discover-solution@validate/altconfig-widening
       with:
         check_title: Build
         require_sdk_style: 'true'

@@ -84,7 +84,7 @@ runs:
 
     - name: Compute changed files
       id: changed
-      uses: BHoM/CI_Toolkit/.github/actions/compute-changed-files@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/compute-changed-files@validate/altconfig-widening
       with:
         # AssemblyInfo.cs is excluded to match BHoMBot's Versioning.cs:49: a
         # milestone version bump touches it fleet-wide and cannot change the
@@ -99,7 +99,7 @@ runs:
     - name: Mint dependency token
       id: dep-token
       if: steps.changed.outputs.count != '0'
-      uses: BHoM/CI_Toolkit/.github/actions/mint-dep-token@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/mint-dep-token@validate/altconfig-widening
       with:
         app_id:         ${{ inputs.app_id }}
         private_key:    ${{ inputs.private_key }}
@@ -108,7 +108,7 @@ runs:
     - name: Resolve dependencies
       id: deps
       if: steps.changed.outputs.count != '0'
-      uses: BHoM/CI_Toolkit/.github/actions/resolve-dependencies@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/resolve-dependencies@validate/altconfig-widening
       with:
         mode: caller
         dotnet_version: ${{ inputs.dotnet_version }}
@@ -146,7 +146,7 @@ runs:
     - name: Discover primary solution
       id: solution
       if: steps.changed.outputs.count != '0'
-      uses: BHoM/CI_Toolkit/.github/actions/discover-solution@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/discover-solution@validate/altconfig-widening
       with:
         check_title: Versioning
     # --- Subject assembly bracket: opens here, closes after the alt-config builds ---
@@ -288,7 +288,7 @@ runs:
     - name: Infer Verification.sln build configuration
       id: ver_config
       if: steps.changed.outputs.count != '0'
-      uses: BHoM/CI_Toolkit/.github/actions/infer-verification-config@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/infer-verification-config@validate/altconfig-widening
       with:
         sln_path: ${{ steps.ver_sln.outputs.path }}
 
@@ -325,7 +325,7 @@ runs:
       id: mock-token
       if: steps.changed.outputs.count != '0'
       continue-on-error: true
-      uses: BHoM/CI_Toolkit/.github/actions/mint-dep-token@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/mint-dep-token@validate/altconfig-widening
       with:
         app_id:         ${{ inputs.app_id }}
         private_key:    ${{ inputs.private_key }}
@@ -640,7 +640,7 @@ runs:
     - name: Prepare VersioningRunner
       id: runner
       if: steps.changed.outputs.count != '0'
-      uses: BHoM/CI_Toolkit/.github/actions/prepare-runner@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/prepare-runner@validate/altconfig-widening
       with:
         runner_project: tools/VersioningRunner/src/VersioningRunner/VersioningRunner.csproj
         output_dir: out\versioning-runner
