@@ -47,7 +47,7 @@ runs:
 
     - name: Compute changed files
       id: changed
-      uses: BHoM/CI_Toolkit/.github/actions/compute-changed-files@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/compute-changed-files@capture/dataset-baseline
       with:
         patterns: ${{ inputs.patterns }}
         output_file: changed_files.txt
@@ -55,7 +55,7 @@ runs:
     - name: Mint dependency token
       id: dep-token
       if: steps.changed.outputs.count != '0'
-      uses: BHoM/CI_Toolkit/.github/actions/mint-dep-token@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/mint-dep-token@capture/dataset-baseline
       with:
         app_id:         ${{ inputs.app_id }}
         private_key:    ${{ inputs.private_key }}
@@ -63,7 +63,7 @@ runs:
 
     - name: Resolve dependencies (Test_Toolkit graph)
       if: steps.changed.outputs.count != '0'
-      uses: BHoM/CI_Toolkit/.github/actions/resolve-dependencies@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/resolve-dependencies@capture/dataset-baseline
       with:
         mode:           seeds
         seeds:          ${{ inputs.test_toolkit_repo }}
@@ -102,7 +102,7 @@ runs:
     - name: Prepare runner
       if: steps.changed.outputs.count != '0'
       id: runner
-      uses: BHoM/CI_Toolkit/.github/actions/prepare-runner@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/prepare-runner@capture/dataset-baseline
       with:
         runner_project: ${{ steps.runner-project.outputs.path }}
         output_dir:     out\runner

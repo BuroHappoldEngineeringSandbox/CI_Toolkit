@@ -38,7 +38,7 @@ runs:
 
     - name: Compute changed files
       id: changed
-      uses: BHoM/CI_Toolkit/.github/actions/compute-changed-files@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/compute-changed-files@capture/dataset-baseline
       with:
         patterns: '*.cs *.csproj *.sln *.props *.targets'
         skip_if_not_pr: 'false'
@@ -68,7 +68,7 @@ runs:
     - name: Mint dependency token
       id: dep-token
       if: steps.test_check.outputs.found == 'true'
-      uses: BHoM/CI_Toolkit/.github/actions/mint-dep-token@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/mint-dep-token@capture/dataset-baseline
       with:
         app_id:         ${{ inputs.app_id }}
         private_key:    ${{ inputs.private_key }}
@@ -76,7 +76,7 @@ runs:
 
     - name: Resolve dependencies
       if: steps.test_check.outputs.found == 'true'
-      uses: BHoM/CI_Toolkit/.github/actions/resolve-dependencies@develop
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/resolve-dependencies@capture/dataset-baseline
       with:
         mode:             caller
         additional_seeds: ${{ inputs.test_toolkit_repo }}
