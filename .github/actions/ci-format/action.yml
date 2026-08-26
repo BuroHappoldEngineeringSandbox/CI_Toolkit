@@ -32,7 +32,7 @@ runs:
 
     - name: Compute changed files
       id: changed
-      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/compute-changed-files@capture/dataset-baseline
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/compute-changed-files@capture/dataset-baseline-frozen
       with:
         patterns: '*.cs *.csproj *.props *.targets'
         output_file: changed_dotnet_files.txt

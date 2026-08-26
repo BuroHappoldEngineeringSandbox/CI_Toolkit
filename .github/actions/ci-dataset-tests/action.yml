@@ -58,7 +58,7 @@ runs:
     # fixtures.
     - name: Compute changed source files
       id: changed-cs
-      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/compute-changed-files@capture/dataset-baseline
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/compute-changed-files@capture/dataset-baseline-frozen
       with:
         patterns: '*.cs *.csproj *.sln *.props *.targets'
         skip_if_not_pr: 'false'
@@ -75,7 +75,7 @@ runs:
     # '*' matches '/' in git pathspecs, so a single '*' spans nested directories.
     - name: Compute changed dataset files
       id: changed-datasets
-      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/compute-changed-files@capture/dataset-baseline
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/compute-changed-files@capture/dataset-baseline-frozen
       with:
         patterns: ':(icase).ci/Datasets/*.json'
         output_file: changed_datasets.txt
@@ -127,7 +127,7 @@ runs:
     - name: Mint dependency token
       id: dep-token
       if: steps.scope.outputs.count != '0'
-      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/mint-dep-token@capture/dataset-baseline
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/mint-dep-token@capture/dataset-baseline-frozen
       with:
         app_id:         ${{ inputs.app_id }}
         private_key:    ${{ inputs.private_key }}
@@ -135,7 +135,7 @@ runs:
 
     - name: Resolve dependencies
       if: steps.scope.outputs.count != '0'
-      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/resolve-dependencies@capture/dataset-baseline
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/resolve-dependencies@capture/dataset-baseline-frozen
       with:
         mode:             caller
         additional_seeds: |
@@ -152,7 +152,7 @@ runs:
     - name: Discover primary solution
       id: solution
       if: steps.scope.outputs.count != '0'
-      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/discover-solution@capture/dataset-baseline
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/discover-solution@capture/dataset-baseline-frozen
       with:
         check_title: DatasetTests
 
@@ -180,7 +180,7 @@ runs:
     - name: Prepare runner
       if: steps.scope.outputs.count != '0'
       id: runner
-      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/prepare-runner@capture/dataset-baseline
+      uses: BuroHappoldEngineeringSandbox/CI_Toolkit/.github/actions/prepare-runner@capture/dataset-baseline-frozen
       with:
         runner_project: tools/ComplianceRunner/src/DatasetTestRunner/DatasetTestRunner.csproj
         output_dir:     out\runner
