@@ -45,10 +45,21 @@ class DatasetTestRunner
         {
             if (verbose) Console.WriteLine($"\n=== Running: {file} ===");
 
+            // The two [SKIP] diagnostics go to stderr, not stdout. They were unconditional
+            // Console.WriteLine, which corrupts the json and sarif formats: those put a single
+            // payload on stdout and nothing may precede it, so one missing fixture made the
+            // output unparseable from its first character. Pre-existing, and OutputEmitter.cs
+            // already cites this exact diagnostic as the reason it guards its own coverage
+            // line. Routing round it was enough while coverage was console-only; it is not now
+            // that the counts are part of the json payload.
+            //
+            // stderr rather than deleting them: both streams reach the job log, so the
+            // diagnostic is preserved everywhere it was visible before, and the counts now
+            // carry the same fact structurally.
             if (!File.Exists(file))
             {
                 accounting.CountNotOnDisk();
-                Console.WriteLine($"  [SKIP] File not found: {file}");
+                Console.Error.WriteLine($"  [SKIP] File not found: {file}");
                 continue;
             }
 
@@ -57,7 +68,7 @@ class DatasetTestRunner
             if (result == null)
             {
                 accounting.CountNoResult();
-                Console.WriteLine($"  [SKIP] No result returned for: {file}");
+                Console.Error.WriteLine($"  [SKIP] No result returned for: {file}");
                 continue;
             }
 
