@@ -252,6 +252,13 @@ class DatasetTestRunner
             var lines            = new List<string>();
             int failingDataCount = 0;
 
+            // ITestInformation carries only Message, Status and UTCTime. Description (which
+            // holds the method signature) and Information (the child rows) are declared on
+            // the concrete TestResult, so the identity this baseline keys on is reachable
+            // only through the cast. CheckTest always populates the tree with TestResults;
+            // anything else falls back to Message, which at least keys on something.
+            string description = (unitInfo as TestResult)?.Description ?? unitInfo.Message ?? "";
+
             if (unitInfo is TestResult unitResult)
             {
                 foreach (var dataInfo in unitResult.Information ?? new List<ITestInformation>())
@@ -279,8 +286,8 @@ class DatasetTestRunner
             records.Add(new DatasetBaseline.FailureRecord
             {
                 Fixture          = fixtureKey,
-                MethodKey        = DatasetBaseline.NormaliseMethodKey(unitInfo.Description),
-                Description      = unitInfo.Description ?? "",
+                MethodKey        = DatasetBaseline.NormaliseMethodKey(description),
+                Description      = description,
                 Status           = unitInfo.Status.ToString(),
                 FailingDataCount = failingDataCount,
                 DifferenceCount  = lines.Count(l => !l.StartsWith("!", StringComparison.Ordinal)),
