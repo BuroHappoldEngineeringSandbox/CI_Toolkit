@@ -73,6 +73,7 @@ public static class DatasetBaseline
         /// </summary>
         public string Fingerprint { get; init; } = "";
 
+        [JsonIgnore]
         public string Key => $"{Fixture}::{MethodKey}";
     }
 
@@ -94,6 +95,9 @@ public static class DatasetBaseline
         public int DifferenceCount { get; init; }
         public string Fingerprint { get; init; } = "";
 
+        // Computed convenience, never data. Serialising it would put a redundant field into a
+        // file humans review, able to drift silently against fixture and methodKey.
+        [JsonIgnore]
         public string Key => $"{Fixture}::{MethodKey}";
     }
 
