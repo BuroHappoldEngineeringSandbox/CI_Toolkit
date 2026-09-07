@@ -206,11 +206,20 @@ jobs:
         run: |
           $fixtures = @(Get-Content test_files.txt)
           Write-Host "::group::Scenario 1"
-          & $env:runner --output github --baseline baseline-full.json @fixtures
+          $out  = & $env:runner --output github --baseline baseline-full.json @fixtures
           $code = $LASTEXITCODE
+          $out | ForEach-Object { Write-Host $_ }
           Write-Host "::endgroup::"
           Write-Host "Scenario 1 exit: $code (expected 0)"
           if ($code -ne 0) { Write-Host "::error::Scenario 1 expected exit 0, got $code"; exit 1 }
+          # A passing run must not print error annotations. The first probe exited 0 and still
+          # emitted nine ::error lines, which is the same unreadable-check problem one step on.
+          $errs = @($out | Where-Object { $_ -match '^::error' })
+          Write-Host "Scenario 1 error annotations: $($errs.Count) (expected 0)"
+          if ($errs.Count -ne 0) { Write-Host "::error::Known failures were still emitted as errors"; $errs | ForEach-Object { Write-Host $_ }; exit 1 }
+          $notices = @($out | Where-Object { $_ -match '^::notice file=' })
+          Write-Host "Scenario 1 notice annotations: $($notices.Count) (expected 9)"
+          exit 0
 
       # ---------------------------------------------------------------- scenario 2
       - name: 'Scenario 2 - a failure outside the baseline is loud'
@@ -223,6 +232,9 @@ jobs:
           Write-Host "::endgroup::"
           Write-Host "Scenario 2 exit: $code (expected 1, for $env:dropped_fixture :: $env:dropped_method)"
           if ($code -eq 0) { Write-Host "::error::Scenario 2 expected a non-zero exit and got 0"; exit 1 }
+          # GHA propagates $LASTEXITCODE for shell: pwsh, so the deliberate non-zero from the
+          # runner would fail this step even though it is the expected result.
+          exit 0
 
       # ---------------------------------------------------------------- scenario 3
       - name: 'Scenario 3 - a baselined entry that stopped failing is reported'
@@ -243,6 +255,7 @@ jobs:
 
           if ($warn -ne 0) { Write-Host "::error::Stale must not fail the run by default"; exit 1 }
           if ($fail -eq 0) { Write-Host "::error::--stale-fails must fail the run"; exit 1 }
+          exit 0
 
       # ---------------------------------------------------------------- regeneration
       - name: 'Regeneration - categories survive, stale entry is dropped'
@@ -261,6 +274,7 @@ jobs:
           Write-Host "Categories carried forward: engine=$engine unknown=$unknown"
           if ($after -ne ($before - 1)) { Write-Host "::error::Regeneration should have dropped exactly the stale entry"; exit 1 }
           if ($unknown -ne 0) { Write-Host "::error::Regeneration lost a category"; exit 1 }
+          exit 0
 
       - name: Upload probe artefacts
         if: always()

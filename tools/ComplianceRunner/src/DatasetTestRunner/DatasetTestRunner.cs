@@ -95,7 +95,8 @@ class DatasetTestRunner
             // over a subset, and without this every other baselined entry would report stale.
             var fixtureKey = PathHelper.NormaliseAnnotationPath(file);
             executedFixtures.Add(fixtureKey);
-            failureRecords.AddRange(CollectFailures(fixtureKey, result));
+            var fileRecords = CollectFailures(fixtureKey, result);
+            failureRecords.AddRange(fileRecords);
 
             var information        = (result.Information ?? Enumerable.Empty<ITestInformation>())
                                      .Where(i => i.Status != TestStatus.Pass);
@@ -111,6 +112,16 @@ class DatasetTestRunner
                     a.FilePath = file;
                 if (a.LineStart <= 0)
                     a.LineStart = 1;
+
+                // RuleName is empty for dataset tests: AnnotationConvert only populates it
+                // from a BH.oM.Test.CodeCompliance.Error, and these findings are TestResults.
+                // Carrying the method key here gives the annotation the same identity the
+                // baseline uses, so a known failure can be downgraded below without
+                // re-deriving it from the message text. It is also the natural SARIF ruleId.
+                // CollectFailures filters non-Pass children in the same order this loop does,
+                // so the lists are index-aligned; the bounds check is belt and braces.
+                if (i < fileRecords.Count)
+                    a.RuleName = fileRecords[i].MethodKey;
 
                 if (verbose)
                 {
@@ -138,10 +149,57 @@ class DatasetTestRunner
         // Passing accounting also gives this runner the coverage denominator the other four
         // already report. Verdict is unchanged: the exit code below is untouched, and Write
         // reports rather than decides.
+        // Classification runs BEFORE the emit, not after it.
+        //
+        // Measured on the sandbox probe: with the verdict applied afterwards, a run where the
+        // baseline accounted for all nine failures exited 0 and still printed nine ::error
+        // lines. A green check covered in errors is the same "nobody reads it" problem this
+        // baseline exists to solve, one step further along. So the report is computed first
+        // and used to set both the annotation levels and the status the emitter reports.
+        DatasetBaseline.Report? report = null;
+        var effectiveStatus = mergedResult.Status;
+
+        if (!string.IsNullOrEmpty(parsed.BaselinePath) && string.IsNullOrEmpty(parsed.WriteBaselinePath))
+        {
+            // A baseline that was asked for and is not there is a configuration error, not an
+            // empty baseline. Treating it as empty would report every known failure as new,
+            // which reads as nine regressions and hides the one real problem.
+            if (!File.Exists(parsed.BaselinePath))
+            {
+                Console.WriteLine($"::error title=DatasetTests::Baseline file not found: {parsed.BaselinePath}");
+                return 1;
+            }
+
+            try
+            {
+                var baseline = DatasetBaseline.Deserialise(File.ReadAllText(parsed.BaselinePath));
+                report = DatasetBaseline.Classify(failureRecords, baseline, executedFixtures);
+            }
+            catch (System.Text.Json.JsonException e)
+            {
+                Console.WriteLine($"::error title=DatasetTests::Baseline file {parsed.BaselinePath} "
+                                + $"could not be parsed: {e.Message}");
+                return 1;
+            }
+
+            var knownKeys = new HashSet<string>(report.Known.Select(k => k.Key), StringComparer.Ordinal);
+            foreach (var a in allAnnotations)
+            {
+                var key = $"{PathHelper.NormaliseAnnotationPath(a.FilePath)}::{a.RuleName}";
+                if (knownKeys.Contains(key)) a.Level = "notice";
+            }
+
+            // Warning rather than Pass when everything is accounted for: the fixtures did
+            // fail, and the check should not claim otherwise just because the failures are
+            // on a list. The exit code below is what decides the job.
+            if (!report.HasUnaccounted)
+                effectiveStatus = allAnnotations.Count == 0 ? TestStatus.Pass : TestStatus.Warning;
+        }
+
         OutputEmitter.Write(
             outputFormat,
             checkType,
-            mergedResult.Status,
+            effectiveStatus,
             allAnnotations,
             sarifFilePath,
             verbose,
@@ -179,31 +237,9 @@ class DatasetTestRunner
         }
 
         // No baseline in play: the verdict is exactly what it was before this option existed.
-        if (string.IsNullOrEmpty(parsed.BaselinePath))
+        if (report is null)
             return mergedResult.Status == TestStatus.Error ? 1 : 0;
 
-        // A baseline path that was asked for and is not there is a configuration error, not an
-        // empty baseline. Treating it as empty would report every known failure as new, which
-        // reads as nine regressions and hides the one real problem.
-        if (!File.Exists(parsed.BaselinePath))
-        {
-            Console.WriteLine($"::error title=DatasetTests::Baseline file not found: {parsed.BaselinePath}");
-            return 1;
-        }
-
-        DatasetBaseline.BaselineFile? baseline;
-        try
-        {
-            baseline = DatasetBaseline.Deserialise(File.ReadAllText(parsed.BaselinePath));
-        }
-        catch (System.Text.Json.JsonException e)
-        {
-            Console.WriteLine($"::error title=DatasetTests::Baseline file {parsed.BaselinePath} "
-                            + $"could not be parsed: {e.Message}");
-            return 1;
-        }
-
-        var report = DatasetBaseline.Classify(failureRecords, baseline, executedFixtures);
         Console.WriteLine(DatasetBaseline.SummaryLine(report));
 
         if (outputFormat == "github")
@@ -217,9 +253,9 @@ class DatasetTestRunner
                 Console.WriteLine($"::error file={d.Fixture},line=1,title=Dataset test failure changed::"
                                 + $"{d.Fixture}: {d.MethodKey} is in the baseline but fails differently: "
                                 + $"{d.DriftDetail}");
-            foreach (var s in report.Stale)
-                Console.WriteLine($"::{(parsed.StaleFails ? "error" : "warning")} file={s.Fixture},line=1,"
-                                + $"title=Stale baseline entry::{s.Fixture}: {s.MethodKey} is in the "
+            foreach (var st in report.Stale)
+                Console.WriteLine($"::{(parsed.StaleFails ? "error" : "warning")} file={st.Fixture},line=1,"
+                                + $"title=Stale baseline entry::{st.Fixture}: {st.MethodKey} is in the "
                                 + "dataset-test baseline but passed. Regenerate the baseline to remove it.");
         }
 
