@@ -52,6 +52,7 @@
     <Compile Include="..\..\src\Shared\Compliance.Shared\ArgParser.cs"    Link="Linked\ArgParser.cs" />
     <Compile Include="..\..\src\Shared\Compliance.Shared\FileAccounting.cs" Link="Linked\FileAccounting.cs" />
     <Compile Include="..\..\src\Shared\Compliance.Shared\FileFilter.cs"   Link="Linked\FileFilter.cs" />
+    <Compile Include="..\..\src\Shared\Compliance.Shared\DatasetBaseline.cs" Link="Linked\DatasetBaseline.cs" />
     <Compile Include="..\..\src\Shared\Compliance.Shared\SarifBuilder.cs" Link="Linked\SarifBuilder.cs" />
   </ItemGroup>
 

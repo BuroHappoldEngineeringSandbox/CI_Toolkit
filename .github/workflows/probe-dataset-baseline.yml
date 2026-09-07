@@ -1,0 +1,277 @@
+# Sandbox probe for the dataset-test known-failure baseline. Prototype only.
+#
+# Runs the modified DatasetTestRunner against a real caller repo and exercises the four
+# baseline paths end to end, so the prototype is demonstrated on the actual failure set
+# rather than on synthesised records. The hermetic classifier tests in
+# Compliance.Unit.Tests cover the logic; this covers the wiring and the real data.
+#
+# Read-only with respect to the caller: BHoM/BHoM_Engine is cloned at a ref and nothing is
+# written back. The baseline files this produces are artifacts, not commits. In production
+# the baseline would live in the caller repo, which is why nothing here commits one.
+#
+# Deliberately does NOT call ci-dataset-tests or prepare-runner:
+#   - ci-dataset-tests pins its nested action refs at BHoM/CI_Toolkit@develop, so calling it
+#     from a branch would test develop's runner, not this one.
+#   - prepare-runner's runner_source_repo mode has bitten sandbox validation before. The
+#     publish here is four lines and leaves nothing to attribute.
+# resolve-dependencies IS the unmodified production action, on purpose: the environment the
+# fixtures execute in has to be the production one or the failure set means nothing.
+#
+# windows-latest, matching the earlier sandbox harness: measured as the same image as
+# windows-2025-vs2026 and it cannot queue forever if the label is not offered in this org.
+name: Probe Dataset Baseline
+
+on:
+  workflow_dispatch:
+    inputs:
+      caller_repo:
+        description: Caller repo to run the fixtures of.
+        required: false
+        default: BHoM/BHoM_Engine
+      caller_ref:
+        description: Ref of the caller repo.
+        required: false
+        default: develop
+
+concurrency:
+  group: probe-dataset-baseline-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      # Caller at the workspace root, matching production, so resolve-dependencies finds
+      # dependencies.txt where it expects it and PathHelper relativises fixture paths to
+      # ".ci/Datasets/..." rather than to an absolute runner path.
+      - name: Checkout caller repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ inputs.caller_repo }}
+          ref: ${{ inputs.caller_ref }}
+          fetch-depth: 1
+
+      - name: Checkout this CI_Toolkit branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: _cit
+
+      - name: Record what is under test
+        shell: pwsh
+        run: |
+          Write-Host "Caller:     ${{ inputs.caller_repo }}@${{ inputs.caller_ref }}"
+          Write-Host "Caller SHA: $(git rev-parse HEAD)"
+          Push-Location _cit
+          Write-Host "CI_Toolkit: ${{ github.ref_name }} $(git rev-parse HEAD)"
+          Pop-Location
+
+      - name: Mint dependency token
+        id: dep-token
+        uses: BHoM/CI_Toolkit/.github/actions/mint-dep-token@develop
+        with:
+          app_id:         ${{ secrets.BHOM_APP_ID }}
+          private_key:    ${{ secrets.BHOM_APP_PRIVATE_KEY }}
+          fallback_token: ${{ github.token }}
+
+      - name: Resolve dependencies
+        uses: BHoM/CI_Toolkit/.github/actions/resolve-dependencies@develop
+        with:
+          mode:             caller
+          additional_seeds: |
+            BHoM/Test_Toolkit
+            BHoM/Versioning_Toolkit
+          dotnet_version:   '8.0'
+          configuration:    Release
+          token:            ${{ steps.dep-token.outputs.token }}
+
+      - name: Build caller solution
+        shell: pwsh
+        run: |
+          $sln = Get-ChildItem -Filter '*.sln' | Where-Object { $_.BaseName -eq (Split-Path '${{ inputs.caller_repo }}' -Leaf) } | Select-Object -First 1
+          if (-not $sln) { Write-Host "::error::No <RepoName>.sln at the repo root."; exit 1 }
+          "sln=$($sln.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "::group::dotnet restore"
+          dotnet restore $sln.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "::endgroup::"
+          Write-Host "::group::dotnet build Release"
+          dotnet build $sln.FullName --no-restore --configuration Release --nologo -m
+          $code = $LASTEXITCODE
+          Write-Host "::endgroup::"
+          if ($code -ne 0) { Write-Host "::error::Caller build failed; fixture results would be meaningless."; exit $code }
+
+      - name: Set up .NET for the runner
+        uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5
+        with:
+          dotnet-version: '10.x'
+
+      - name: Publish DatasetTestRunner from this branch
+        shell: pwsh
+        run: |
+          dotnet publish _cit/tools/ComplianceRunner/src/DatasetTestRunner/DatasetTestRunner.csproj `
+            --configuration Release -o out/runner --nologo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "runner=$((Resolve-Path 'out/runner/DatasetTestRunner.exe').Path)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      # All fixtures, matching the all-fixtures branch of ci-dataset-tests (a source change
+      # can affect any test). No change detection here: this probe always runs everything.
+      - name: Resolve fixture list
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path ".ci/Datasets" -Recurse -Filter "*.json" -ErrorAction SilentlyContinue
+          if (-not $files) { Write-Host "::error::No .ci/Datasets fixtures found."; exit 1 }
+          $files.FullName | Set-Content test_files.txt
+          Write-Host "::notice::$($files.Count) fixture(s)."
+
+      # ---------------------------------------------------------------- run A: capture
+      - name: 'Run A - capture failure records and seed a baseline'
+        shell: pwsh
+        run: |
+          $fixtures = @(Get-Content test_files.txt)
+          Write-Host "::group::Run A"
+          & $env:runner --output console --dump-failures dump.json --write-baseline baseline-seed.json @fixtures
+          $code = $LASTEXITCODE
+          Write-Host "::endgroup::"
+          Write-Host "Run A exit: $code (expected 0: --write-baseline reports, it does not gate)"
+          if ($code -ne 0) { exit $code }
+          $d = Get-Content dump.json -Raw | ConvertFrom-Json
+          Write-Host "Executed fixtures: $(@($d.executedFixtures).Count)"
+          Write-Host "Failure records:   $(@($d.failures).Count)"
+          @($d.failures) | ForEach-Object { Write-Host ("  {0,-58} {1,-52} rows={2} diffs={3} fp={4}" -f $_.fixture, $_.methodKey, $_.failingDataCount, $_.differenceCount, $_.fingerprint) }
+
+      # Categories are the one thing a machine cannot derive. Assigned here by rule so the
+      # probe is self-contained; in production a human fills them in once per new entry and
+      # regeneration carries them forward by key.
+      #   engine  + match:method  the near-tangency Ellipse overloads. Their failure SHAPE
+      #                           flips between one and two intersection points, so an exact
+      #                           fingerprint would report drift on an unchanged defect.
+      #   comparer + match:exact  everything else: runtime-serialised expectations, expected
+      #                           to pass once the Test_Toolkit comparer lands.
+      - name: Assign categories and build the three scenario baselines
+        shell: pwsh
+        run: |
+          $b = Get-Content baseline-seed.json -Raw | ConvertFrom-Json
+          $b.entries = @($b.entries)
+          if ($b.entries.Count -lt 2) { Write-Host "::error::Expected several baselined failures, got $($b.entries.Count). The scenarios below need at least two."; exit 1 }
+          foreach ($e in $b.entries) {
+            if ($e.methodKey -match 'Ellipse') {
+              $e.category = 'engine'
+              $e.match    = 'method'
+              $e.reason   = 'Near-tangency branch in Geometry_Engine PlaneIntersection.cs decides point count on a hard tolerance comparison; last-digit variation flips the result shape.'
+              $e.issue    = 'BHoM/BHoM_Engine (no issue open yet)'
+            } else {
+              $e.category = 'comparer'
+              $e.match    = 'exact'
+              $e.reason   = 'Expectations serialised under .NET Framework, executed on net10.0; absolute 1e-12 NumericTolerance cannot absorb the difference.'
+              $e.issue    = 'BHoM/BHoM_Engine#3514'
+            }
+          }
+          $json = $b | ConvertTo-Json -Depth 8
+          Set-Content -Path baseline-full.json -Value $json -Encoding utf8
+          Write-Host "::group::baseline-full.json"; Get-Content baseline-full.json | Write-Host; Write-Host "::endgroup::"
+
+          # Scenario 2: drop one accepted entry, so its failure has nothing to match.
+          $dropped = @($b.entries)[0]
+          $c = Get-Content baseline-full.json -Raw | ConvertFrom-Json
+          $c.entries = @(@($c.entries) | Where-Object { -not ($_.fixture -eq $dropped.fixture -and $_.methodKey -eq $dropped.methodKey) })
+          Set-Content -Path baseline-missing-one.json -Value ($c | ConvertTo-Json -Depth 8) -Encoding utf8
+          "dropped_fixture=$($dropped.fixture)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "dropped_method=$($dropped.methodKey)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Scenario 2 drops: $($dropped.fixture) :: $($dropped.methodKey)"
+
+          # Scenario 3: add an entry for a fixture that runs and passes, standing in for an
+          # entry that a Test_Toolkit fix has just made redundant.
+          $d = Get-Content baseline-full.json -Raw | ConvertFrom-Json
+          $executed = @((Get-Content dump.json -Raw | ConvertFrom-Json).executedFixtures)
+          $failing  = @((Get-Content dump.json -Raw | ConvertFrom-Json).failures | ForEach-Object { $_.fixture })
+          $passing  = $executed | Where-Object { $failing -notcontains $_ } | Select-Object -First 1
+          if (-not $passing) { Write-Host "::error::No passing fixture to stand in for a fixed entry."; exit 1 }
+          $phantom = @($d.entries)[0].PSObject.Copy()
+          $phantom.fixture   = $passing
+          $phantom.methodKey = 'AlreadyFixed(Double)'
+          $phantom.category  = 'comparer'
+          $phantom.reason    = 'Stands in for an entry a comparer fix has made redundant.'
+          $d.entries = @($d.entries) + @($phantom)
+          Set-Content -Path baseline-with-stale.json -Value ($d | ConvertTo-Json -Depth 8) -Encoding utf8
+          "stale_fixture=$passing" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Scenario 3 adds a stale entry on: $passing"
+
+      # ---------------------------------------------------------------- scenario 1
+      - name: 'Scenario 1 - the known set classifies and the job passes'
+        shell: pwsh
+        run: |
+          $fixtures = @(Get-Content test_files.txt)
+          Write-Host "::group::Scenario 1"
+          & $env:runner --output github --baseline baseline-full.json @fixtures
+          $code = $LASTEXITCODE
+          Write-Host "::endgroup::"
+          Write-Host "Scenario 1 exit: $code (expected 0)"
+          if ($code -ne 0) { Write-Host "::error::Scenario 1 expected exit 0, got $code"; exit 1 }
+
+      # ---------------------------------------------------------------- scenario 2
+      - name: 'Scenario 2 - a failure outside the baseline is loud'
+        shell: pwsh
+        run: |
+          $fixtures = @(Get-Content test_files.txt)
+          Write-Host "::group::Scenario 2"
+          & $env:runner --output github --baseline baseline-missing-one.json @fixtures
+          $code = $LASTEXITCODE
+          Write-Host "::endgroup::"
+          Write-Host "Scenario 2 exit: $code (expected 1, for $env:dropped_fixture :: $env:dropped_method)"
+          if ($code -eq 0) { Write-Host "::error::Scenario 2 expected a non-zero exit and got 0"; exit 1 }
+
+      # ---------------------------------------------------------------- scenario 3
+      - name: 'Scenario 3 - a baselined entry that stopped failing is reported'
+        shell: pwsh
+        run: |
+          $fixtures = @(Get-Content test_files.txt)
+          Write-Host "::group::Scenario 3 (default: stale warns)"
+          & $env:runner --output github --baseline baseline-with-stale.json @fixtures
+          $warn = $LASTEXITCODE
+          Write-Host "::endgroup::"
+          Write-Host "Scenario 3 exit with stale warning: $warn (expected 0)"
+
+          Write-Host "::group::Scenario 3 (--stale-fails)"
+          & $env:runner --output github --baseline baseline-with-stale.json --stale-fails @fixtures
+          $fail = $LASTEXITCODE
+          Write-Host "::endgroup::"
+          Write-Host "Scenario 3 exit with --stale-fails: $fail (expected 1)"
+
+          if ($warn -ne 0) { Write-Host "::error::Stale must not fail the run by default"; exit 1 }
+          if ($fail -eq 0) { Write-Host "::error::--stale-fails must fail the run"; exit 1 }
+
+      # ---------------------------------------------------------------- regeneration
+      - name: 'Regeneration - categories survive, stale entry is dropped'
+        shell: pwsh
+        run: |
+          $fixtures = @(Get-Content test_files.txt)
+          & $env:runner --output console --baseline baseline-with-stale.json --write-baseline baseline-regenerated.json @fixtures
+          $before = @((Get-Content baseline-with-stale.json -Raw | ConvertFrom-Json).entries).Count
+          $after  = @((Get-Content baseline-regenerated.json -Raw | ConvertFrom-Json).entries).Count
+          $regen  = Get-Content baseline-regenerated.json -Raw | ConvertFrom-Json
+          Write-Host "Entries before regeneration: $before"
+          Write-Host "Entries after regeneration:  $after"
+          Write-Host "::group::baseline-regenerated.json"; Get-Content baseline-regenerated.json | Write-Host; Write-Host "::endgroup::"
+          $unknown = @($regen.entries | Where-Object { $_.category -eq 'unknown' }).Count
+          $engine  = @($regen.entries | Where-Object { $_.category -eq 'engine' }).Count
+          Write-Host "Categories carried forward: engine=$engine unknown=$unknown"
+          if ($after -ne ($before - 1)) { Write-Host "::error::Regeneration should have dropped exactly the stale entry"; exit 1 }
+          if ($unknown -ne 0) { Write-Host "::error::Regeneration lost a category"; exit 1 }
+
+      - name: Upload probe artefacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dataset-baseline-probe
+          path: |
+            dump.json
+            baseline-seed.json
+            baseline-full.json
+            baseline-missing-one.json
+            baseline-with-stale.json
+            baseline-regenerated.json
+          if-no-files-found: warn

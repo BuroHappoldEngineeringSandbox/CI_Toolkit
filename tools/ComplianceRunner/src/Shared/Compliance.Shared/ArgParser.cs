@@ -17,7 +17,17 @@ public static class ArgParser
     public sealed record DatasetArgs(
         string        OutputFormat,
         string?       SarifFilePath,
-        List<string>? Files);
+        List<string>? Files,
+        // Known-failure baseline. All three default to null, so a runner invoked exactly as
+        // it is today behaves exactly as it does today: any Error is exit 1.
+        string?       BaselinePath      = null,
+        string?       WriteBaselinePath = null,
+        string?       DumpFailuresPath  = null,
+        // Stale entries are reported but do not fail the run by default. Failing on stale
+        // would turn every repo red the moment a Test_Toolkit comparer fix lands and before
+        // anyone has regenerated, which is the opposite of the intent.
+        bool          StaleFails        = false,
+        string        GeneratedStamp    = "");
 
     public static ComplianceArgs ParseCompliance(string[] args)
     {
@@ -55,6 +65,11 @@ public static class ArgParser
     {
         string  outputFormat  = "console";
         string? sarifFilePath = null;
+        string? baseline      = null;
+        string? writeBaseline = null;
+        string? dumpFailures  = null;
+        bool    staleFails    = false;
+        string  stamp         = "";
         var     rest          = new List<string>();
 
         for (int i = 0; i < args.Length; i++)
@@ -66,12 +81,22 @@ public static class ArgParser
             }
             else if ((args[i] == "--sarif-file" || args[i] == "--sarif") && i + 1 < args.Length)
                 sarifFilePath = args[++i];
+            else if (args[i] == "--baseline" && i + 1 < args.Length)
+                baseline = args[++i];
+            else if (args[i] == "--write-baseline" && i + 1 < args.Length)
+                writeBaseline = args[++i];
+            else if (args[i] == "--dump-failures" && i + 1 < args.Length)
+                dumpFailures = args[++i];
+            else if (args[i] == "--generated-stamp" && i + 1 < args.Length)
+                stamp = args[++i];
+            else if (args[i] == "--stale-fails")
+                staleFails = true;
             else
                 rest.Add(args[i]);
         }
 
-        return rest.Count == 0
-            ? new DatasetArgs(outputFormat, sarifFilePath, null)
-            : new DatasetArgs(outputFormat, sarifFilePath, rest);
+        return new DatasetArgs(
+            outputFormat, sarifFilePath, rest.Count == 0 ? null : rest,
+            baseline, writeBaseline, dumpFailures, staleFails, stamp);
     }
 }

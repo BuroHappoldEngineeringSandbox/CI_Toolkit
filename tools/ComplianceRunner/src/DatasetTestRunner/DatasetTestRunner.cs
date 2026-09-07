@@ -6,18 +6,25 @@ using BH.Engine.Test;                   // Modify.Merge
 using BH.Engine.UnitTest;               // CheckTest extension method
 using BH.oM.Test;                       // TestStatus
 using BH.oM.Test.Results;              // TestResult, ITestInformation
+using BH.oM.UnitTest.Results;           // ComparisonDifference
 
 class DatasetTestRunner
 {
     static int Main(string[] args)
     {
         // CLI: DatasetTestRunner [--output console|github|json|sarif] [--sarif-file PATH]
+        //                        [--baseline PATH] [--write-baseline PATH]
+        //                        [--dump-failures PATH] [--stale-fails]
+        //                        [--generated-stamp TEXT]
         //                        <file1.json> [file2.json ...]
-        var (outputFormat, sarifFilePath, files) = ArgParser.ParseDataset(args);
+        var parsed = ArgParser.ParseDataset(args);
+        var (outputFormat, sarifFilePath, files) = (parsed.OutputFormat, parsed.SarifFilePath, parsed.Files);
         if (files == null || files.Count == 0)
         {
             Console.WriteLine("Usage:");
             Console.WriteLine("  DatasetTestRunner [--output console|github|json|sarif] [--sarif-file PATH]");
+            Console.WriteLine("                    [--baseline PATH] [--write-baseline PATH]");
+            Console.WriteLine("                    [--dump-failures PATH] [--stale-fails]");
             Console.WriteLine("                    <file1.json> [file2.json ...]");
             return 1;
         }
@@ -35,6 +42,12 @@ class DatasetTestRunner
 
         var mergedResult   = new TestResult() { Status = TestStatus.Pass, Information = new List<ITestInformation>() };
         var allAnnotations = new List<Annotation>();
+
+        // Per-unit-test failure records, keyed by (repo-relative fixture, normalised method).
+        // Collected on every run, whether or not a baseline is in play, so --dump-failures can
+        // capture a run's set without changing its verdict.
+        var failureRecords   = new List<DatasetBaseline.FailureRecord>();
+        var executedFixtures = new List<string>();
 
         // Three of FileAccounting's four exits. This runner applies no relevance filter — the
         // action hands it the fixtures it already selected — so NotRelevant stays zero and the
@@ -76,6 +89,13 @@ class DatasetTestRunner
 
             accounting.CountExamined();
             mergedResult = mergedResult.Merge(result);
+
+            // Record the fixture as executed BEFORE testing whether it failed. Staleness is
+            // only meaningful for fixtures that ran: on a dataset-only change the action hands
+            // over a subset, and without this every other baselined entry would report stale.
+            var fixtureKey = PathHelper.NormaliseAnnotationPath(file);
+            executedFixtures.Add(fixtureKey);
+            failureRecords.AddRange(CollectFailures(fixtureKey, result));
 
             var information        = (result.Information ?? Enumerable.Empty<ITestInformation>())
                                      .Where(i => i.Status != TestStatus.Pass);
@@ -128,6 +148,153 @@ class DatasetTestRunner
             BH.Engine.Base.Query.DocumentationURL("DevOps/Code%20Compliance%20and%20CI/Compliance%20Checks/"),
             accounting);
 
-        return mergedResult.Status == TestStatus.Error ? 1 : 0;
+        if (!string.IsNullOrEmpty(parsed.DumpFailuresPath))
+        {
+            File.WriteAllText(parsed.DumpFailuresPath,
+                System.Text.Json.JsonSerializer.Serialize(
+                    new { executedFixtures, failures = failureRecords },
+                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            if (verbose) Console.WriteLine($"Failure records written to {parsed.DumpFailuresPath}");
+        }
+
+        // Regeneration. Reads the existing baseline if one is present so the human-authored
+        // fields survive, then writes the observed set. Deliberately does not gate: a
+        // regeneration run reports what it wrote and exits 0 on the baseline's account.
+        if (!string.IsNullOrEmpty(parsed.WriteBaselinePath))
+        {
+            DatasetBaseline.BaselineFile? previous = null;
+            if (!string.IsNullOrEmpty(parsed.BaselinePath) && File.Exists(parsed.BaselinePath))
+                previous = DatasetBaseline.Deserialise(File.ReadAllText(parsed.BaselinePath));
+
+            var generated = DatasetBaseline.Generate(
+                failureRecords, previous, parsed.GeneratedStamp,
+                "Regenerate with the ci-dataset-tests action's regenerate_baseline input. "
+              + "category and reason are carried forward by key and must be filled in by hand "
+              + "for any new entry.");
+
+            File.WriteAllText(parsed.WriteBaselinePath, DatasetBaseline.Serialise(generated));
+            Console.WriteLine($"Baseline written to {parsed.WriteBaselinePath} "
+                            + $"({generated.Entries.Count} entry(ies)).");
+            return 0;
+        }
+
+        // No baseline in play: the verdict is exactly what it was before this option existed.
+        if (string.IsNullOrEmpty(parsed.BaselinePath))
+            return mergedResult.Status == TestStatus.Error ? 1 : 0;
+
+        // A baseline path that was asked for and is not there is a configuration error, not an
+        // empty baseline. Treating it as empty would report every known failure as new, which
+        // reads as nine regressions and hides the one real problem.
+        if (!File.Exists(parsed.BaselinePath))
+        {
+            Console.WriteLine($"::error title=DatasetTests::Baseline file not found: {parsed.BaselinePath}");
+            return 1;
+        }
+
+        DatasetBaseline.BaselineFile? baseline;
+        try
+        {
+            baseline = DatasetBaseline.Deserialise(File.ReadAllText(parsed.BaselinePath));
+        }
+        catch (System.Text.Json.JsonException e)
+        {
+            Console.WriteLine($"::error title=DatasetTests::Baseline file {parsed.BaselinePath} "
+                            + $"could not be parsed: {e.Message}");
+            return 1;
+        }
+
+        var report = DatasetBaseline.Classify(failureRecords, baseline, executedFixtures);
+        Console.WriteLine(DatasetBaseline.SummaryLine(report));
+
+        if (outputFormat == "github")
+        {
+            foreach (var n in report.New)
+                Console.WriteLine($"::error file={n.Fixture},line=1,title=New dataset test failure::"
+                                + $"{n.Fixture}: {n.MethodKey} is failing and is not in the dataset-test "
+                                + "baseline. Either it is a regression from this change, or the baseline "
+                                + "needs regenerating with a reason recorded.");
+            foreach (var d in report.Drifted)
+                Console.WriteLine($"::error file={d.Fixture},line=1,title=Dataset test failure changed::"
+                                + $"{d.Fixture}: {d.MethodKey} is in the baseline but fails differently: "
+                                + $"{d.DriftDetail}");
+            foreach (var s in report.Stale)
+                Console.WriteLine($"::{(parsed.StaleFails ? "error" : "warning")} file={s.Fixture},line=1,"
+                                + $"title=Stale baseline entry::{s.Fixture}: {s.MethodKey} is in the "
+                                + "dataset-test baseline but passed. Regenerate the baseline to remove it.");
+        }
+
+        var summaryPath = Environment.GetEnvironmentVariable("GITHUB_STEP_SUMMARY");
+        if (!string.IsNullOrEmpty(summaryPath))
+            File.AppendAllText(summaryPath, DatasetBaseline.Markdown(report, parsed.StaleFails));
+
+        if (report.HasUnaccounted) return 1;
+        if (parsed.StaleFails && report.Stale.Count > 0) return 1;
+        return 0;
+    }
+
+    /// <summary>
+    /// Walks one fixture's result tree into per-unit-test failure records.
+    ///
+    /// The tree CheckTest builds is three deep: the dataset result's Information holds one
+    /// TestResult per UnitTest, whose Information holds one TestResult per TestData row, whose
+    /// Information holds the ComparisonDifferences. Only the top level is currently turned into
+    /// annotations, which is why the job log carries one truncated message per method and
+    /// nothing keyable.
+    /// </summary>
+    static List<DatasetBaseline.FailureRecord> CollectFailures(string fixtureKey, TestResult datasetResult)
+    {
+        var records = new List<DatasetBaseline.FailureRecord>();
+
+        foreach (var unitInfo in datasetResult.Information ?? new List<ITestInformation>())
+        {
+            if (unitInfo == null || unitInfo.Status == TestStatus.Pass) continue;
+
+            var lines            = new List<string>();
+            int failingDataCount = 0;
+
+            if (unitInfo is TestResult unitResult)
+            {
+                foreach (var dataInfo in unitResult.Information ?? new List<ITestInformation>())
+                {
+                    if (dataInfo == null || dataInfo.Status == TestStatus.Pass) continue;
+                    failingDataCount++;
+
+                    var differences = (dataInfo as TestResult)?.Information ?? new List<ITestInformation>();
+                    int before = lines.Count;
+
+                    foreach (var diff in differences)
+                        if (diff is ComparisonDifference cd)
+                            lines.Add(DatasetBaseline.DifferenceLine(cd.Property, cd.ReferenceValue));
+
+                    // A row can fail without producing any ComparisonDifference: CheckTest
+                    // returns early with only a Message when the method threw or returned a
+                    // different number of outputs. Those messages are fixed strings except the
+                    // exception path, whose text is not stable — such an entry should carry
+                    // match: method in the baseline rather than an exact fingerprint.
+                    if (lines.Count == before)
+                        lines.Add("!" + FirstLine(dataInfo.Message));
+                }
+            }
+
+            records.Add(new DatasetBaseline.FailureRecord
+            {
+                Fixture          = fixtureKey,
+                MethodKey        = DatasetBaseline.NormaliseMethodKey(unitInfo.Description),
+                Description      = unitInfo.Description ?? "",
+                Status           = unitInfo.Status.ToString(),
+                FailingDataCount = failingDataCount,
+                DifferenceCount  = lines.Count(l => !l.StartsWith("!", StringComparison.Ordinal)),
+                Fingerprint      = DatasetBaseline.Fingerprint(lines),
+            });
+        }
+
+        return records;
+    }
+
+    static string FirstLine(string? s)
+    {
+        var t = (s ?? "").Replace("\r", "");
+        int nl = t.IndexOf('\n');
+        return (nl < 0 ? t : t.Substring(0, nl)).Trim();
     }
 }
