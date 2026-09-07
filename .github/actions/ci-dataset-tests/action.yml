@@ -44,6 +44,36 @@ inputs:
       .NET SDK version for publishing DatasetTestRunner.
     required: false
     default: '10.x'
+  baseline_file:
+    description: >
+      Path, relative to the caller repo root, to the known-failure baseline. When the file
+      is absent the check behaves exactly as it did before this input existed: any failing
+      fixture fails the job. When it is present, failures it accounts for are reported as
+      known, and only a failure outside it, or a baselined failure whose shape changed,
+      fails the job.
+
+      Regenerate it rather than editing it: see regenerate_baseline. The category and reason
+      on each entry are the only hand-authored fields and are carried forward by key.
+    required: false
+    default: '.ci/dataset-test-baseline.json'
+  stale_policy:
+    description: >
+      What to do about a baseline entry whose fixture ran and did not fail. 'warn' reports
+      it and lets the job pass; 'fail' fails the job.
+
+      Defaults to warn. A Test_Toolkit comparer fix will retire many entries at once, and
+      failing on stale would turn every repo red between that landing and each baseline
+      being regenerated — punishing the fix. Move to fail once the set is stable.
+    required: false
+    default: 'warn'
+  regenerate_baseline:
+    description: >
+      When 'true', rewrite the baseline from this run instead of checking against it, and
+      upload it as an artifact. Nothing is committed: the file belongs to the caller repo,
+      so a human takes the artifact, fills in the category and reason for any new entry,
+      and opens a pull request. Intended for workflow_dispatch, not for pull_request.
+    required: false
+    default: 'false'
 
 runs:
   using: composite
@@ -201,11 +231,38 @@ runs:
           exit 0
         }
 
+        # Baseline arguments are built here rather than inlined into the call so the
+        # no-baseline path is a genuinely empty argument list. A repo with no baseline file
+        # invokes the runner with exactly the arguments it used before this existed.
+        $baselineArgs = @()
+        $baselinePath = "${{ inputs.baseline_file }}"
+        $regenerate   = "${{ inputs.regenerate_baseline }}" -eq 'true'
+
+        if ($regenerate) {
+          if ($baselinePath -and (Test-Path $baselinePath)) { $baselineArgs += @('--baseline', $baselinePath) }
+          $baselineArgs += @('--write-baseline', 'dataset-test-baseline.generated.json')
+          $baselineArgs += @('--generated-stamp', (Get-Date).ToUniversalTime().ToString('o'))
+          Write-Host "::notice::Regenerating the dataset-test baseline. Nothing is committed; take the artifact."
+        }
+        elseif ($baselinePath -and (Test-Path $baselinePath)) {
+          $baselineArgs += @('--baseline', $baselinePath)
+          if ("${{ inputs.stale_policy }}" -eq 'fail') { $baselineArgs += '--stale-fails' }
+          Write-Host "::notice::Checking against the known-failure baseline at $baselinePath."
+        }
+        else {
+          # Said out loud. A missing baseline is the difference between "nine accepted
+          # environment failures" and "nine failures nobody has looked at", and the two
+          # look identical in a red check.
+          Write-Host "::notice::No dataset-test baseline at '$baselinePath'. Every failing fixture will fail this check."
+        }
+
         Write-Host "::group::BHoM dataset unit tests"
-        & $runnerExe --output github @fileList
+        & $runnerExe --output github @baselineArgs @fileList
         $exitCode = $LASTEXITCODE
         Write-Host "::endgroup::"
 
+        # The runner writes its own baseline table to the step summary when a baseline is in
+        # play. This line always runs, so the fixture count is reported either way.
         if ($env:GITHUB_STEP_SUMMARY) {
           $status = if ($exitCode -eq 0) { "passed" } else { "**failed**" }
           @(
@@ -216,3 +273,11 @@ runs:
         }
 
         exit $exitCode
+
+    - name: Upload regenerated baseline
+      if: inputs.regenerate_baseline == 'true' && steps.scope.outputs.count != '0'
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: dataset-test-baseline
+        path: dataset-test-baseline.generated.json
+        if-no-files-found: warn
