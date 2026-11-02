@@ -619,7 +619,7 @@ runs:
             # Drop the per-test detail rather than the counts, and say so.
             $trimmed = New-Object Text.StringBuilder
             foreach ($line in $body -split "`r?`n") {
-              if ($line -match '^\| ``' -and $line -notmatch '\| (failed|excluded)') { continue }
+              if ($line -match '^\|.*\|\s*(passed|not run)\s*\|$') { continue }
               [void]$trimmed.AppendLine($line)
             }
             $body = $trimmed.ToString()
