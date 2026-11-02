@@ -272,11 +272,11 @@ runs:
         $testFailed    = @()   # at least one test failed
         $allExcluded   = @()   # has tests, every one carries the category
         $noneExecuted  = @()   # tests survived the filter, none of them ran
-        $partialNotRun = @()   # some ran, some did not
         $badResults    = @()   # .trx present but carries no counters
         $countMismatch = @()   # listing and run disagree on case expansion
         $rows          = @()
         $ranTotal      = 0
+        $rowsPath      = Join-Path $env:RUNNER_TEMP 'ci-unit-tests-rows.json'
 
         foreach ($proj in $projects) {
           $name = [IO.Path]::GetFileNameWithoutExtension($proj)
@@ -289,7 +289,7 @@ runs:
           Write-Host "::endgroup::"
           if ($buildExit -ne 0) {
             $buildFailed += $name
-            $rows += [pscustomobject]@{ Project = $name; Discovered = '-'; Ran = '-'; Excluded = '-'; NotRun = '-'; Failed = '-'; Result = 'build failed' }
+            $rows += [pscustomobject]@{ Project = $name; Discovered = '-'; Passed = '-'; Failed = '-'; NotRun = '-'; Excluded = '-'; Result = 'build failed' }
             continue
           }
 
@@ -357,13 +357,13 @@ runs:
 
           if (-not $listRead) {
             $undetermined += $name
-            $rows += [pscustomobject]@{ Project = $name; Discovered = '?'; Ran = '-'; Excluded = '-'; NotRun = '-'; Failed = '-'; Result = 'count unreadable' }
+            $rows += [pscustomobject]@{ Project = $name; Discovered = '?'; Passed = '-'; Failed = '-'; NotRun = '-'; Excluded = '-'; Result = 'count unreadable' }
             continue
           }
 
           if ($discovered -eq 0) {
             $noTests += $name
-            $rows += [pscustomobject]@{ Project = $name; Discovered = 0; Ran = 0; Excluded = 0; NotRun = 0; Failed = 0; Result = 'no tests' }
+            $rows += [pscustomobject]@{ Project = $name; Discovered = 0; Passed = 0; Failed = 0; NotRun = 0; Excluded = 0; Result = 'no tests' }
             continue
           }
 
@@ -383,7 +383,7 @@ runs:
           $trx = Join-Path "TestResults" "$name.trx"
           if (-not (Test-Path $trx)) {
             $noOutput += $name
-            $rows += [pscustomobject]@{ Project = $name; Discovered = $discovered; Ran = '-'; Excluded = '-'; NotRun = '-'; Failed = '-'; Result = 'no test output' }
+            $rows += [pscustomobject]@{ Project = $name; Discovered = $discovered; Passed = '-'; Failed = '-'; NotRun = '-'; Excluded = '-'; Result = 'no test output' }
             continue
           }
 
@@ -399,7 +399,7 @@ runs:
           # from "every test carried the category", which is a pass.
           if (-not $counters -or $null -eq $counters.total) {
             $badResults += $name
-            $rows += [pscustomobject]@{ Project = $name; Discovered = $discovered; Ran = '-'; Excluded = '-'; NotRun = '-'; Failed = '-'; Result = 'results unreadable' }
+            $rows += [pscustomobject]@{ Project = $name; Discovered = $discovered; Passed = '-'; Failed = '-'; NotRun = '-'; Excluded = '-'; Result = 'results unreadable' }
             continue
           }
           $total    = [int]$counters.total
@@ -442,13 +442,12 @@ runs:
             $result = if ($notRun -gt 0) { 'passed, some not run' } else { 'passed' }
           }
 
-          $rows += [pscustomobject]@{ Project = $name; Discovered = $discovered; Ran = $executed; Excluded = $excluded; NotRun = $notRun; Failed = $failedN; Result = $result }
+          $rows += [pscustomobject]@{ Project = $name; Discovered = $discovered; Passed = ($executed - $failedN); Failed = $failedN; NotRun = $notRun; Excluded = $excluded; Result = $result }
 
           if ($excluded -gt 0) {
             Write-Host "::notice title=UnitTests::${name}: skipped: $excluded tests require external software"
           }
           if ($executed -gt 0 -and $notRun -gt 0) {
-            $partialNotRun += [pscustomobject]@{ Name = $name; NotRun = $notRun; Total = $total; Names = $notRunNames }
             # GitHub truncates an annotation at roughly four thousand characters,
             # and a parameterised fixture can produce hundreds of names. Cap the
             # annotation and keep the full list in the job summary, which has no
@@ -459,29 +458,12 @@ runs:
           }
         }
 
-        # Per-project table, in the job summary and the log.
+        # Per-project table in the log. The job summary is written once, by the
+        # last step in the job, from these rows plus the .trx files, so the two
+        # cannot disagree and the page is laid out in one place.
         $table = $rows | Format-Table -AutoSize | Out-String
         Write-Host $table
-        "### Unit tests"                                                          | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-        ""                                                                        | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-        "Filter: ``$filter``"                                                     | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-        ""                                                                        | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-        "| Project | Discovered | Ran | Excluded | Not run | Failed | Result |"     | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-        "|---|---:|---:|---:|---:|---:|---|"                                      | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-        foreach ($r in $rows) {
-          "| $($r.Project) | $($r.Discovered) | $($r.Ran) | $($r.Excluded) | $($r.NotRun) | $($r.Failed) | $($r.Result) |" |
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY
-        }
-
-        if ($partialNotRun) {
-          ""                                                                      | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-          "> **Not run.** These tests were admitted by the filter and the runner did not execute them, usually `Assert.Inconclusive` or `[Ignore]`. The check passed on the tests that did run." |
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY
-          ""                                                                      | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-          foreach ($p in $partialNotRun) {
-            foreach ($t in $p.Names) { "- ``$($p.Name)``: $t" | Add-Content -Path $env:GITHUB_STEP_SUMMARY }
-          }
-        }
+        $rows | ConvertTo-Json -Depth 3 -AsArray | Set-Content -Path $rowsPath -Encoding utf8
 
         foreach ($n in $allExcluded) {
           Write-Host "::notice title=UnitTests::${n}: every test carries [Category(`"$category`")], so none ran. This is a pass."
@@ -515,124 +497,13 @@ runs:
         if ($buildFailed -or $undetermined -or $noTests -or $noneExecuted -or $noOutput -or $badResults -or $testFailed) { exit 1 }
 
     - name: Upload test results (TRX)
+      id: test_results
       if: always() && hashFiles('TestResults/**/*.trx') != ''
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
         name: test-results-${{ github.run_id }}
         path: TestResults/
         retention-days: 7
-
-    # Every test's result, named, from the .trx files plus the listings kept
-    # during the run. Never fails the check: a reporting step that can red a
-    # build is worse than no reporting step.
-    - name: Unit test summary
-      if: always() && steps.test_check.outputs.found == 'true'
-      shell: pwsh
-      env:
-        EXTERNAL_CATEGORY: ${{ inputs.external_category }}
-      run: |
-        try {
-          $cap = 900KB   # GitHub caps a step summary at 1 MiB; leave headroom.
-          $sb  = New-Object Text.StringBuilder
-          [void]$sb.AppendLine('## Unit tests')
-          [void]$sb.AppendLine('')
-
-          $trxFiles = @(Get-ChildItem TestResults -Filter *.trx -ErrorAction SilentlyContinue | Sort-Object Name)
-          if (-not $trxFiles) {
-            [void]$sb.AppendLine('No test results were produced.')
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $sb.ToString()
-            exit 0
-          }
-
-          $detail = New-Object Text.StringBuilder
-          $gp = 0; $gf = 0; $gn = 0; $gx = 0
-          foreach ($f in $trxFiles) {
-            $name = [IO.Path]::GetFileNameWithoutExtension($f.Name)
-            [xml]$x = Get-Content $f.FullName
-            $results = @($x.TestRun.Results.UnitTestResult)
-            $passed  = @($results | Where-Object { $_.outcome -eq 'Passed' })
-            $failed  = @($results | Where-Object { $_.outcome -eq 'Failed' })
-            $notrun  = @($results | Where-Object { $_.outcome -ne 'Passed' -and $_.outcome -ne 'Failed' })
-
-            # Excluded = listed before the filter, absent from the results after
-            # it. The listing carries fully qualified names and the .trx carries
-            # short ones, so compare on the method-and-arguments tail.
-            $excluded = @()
-            $listPath = Join-Path $env:RUNNER_TEMP "listed-$name.txt"
-            if (Test-Path $listPath) {
-              $ran = @($results | ForEach-Object { $_.testName })
-              foreach ($l in (Get-Content $listPath | Where-Object { $_ })) {
-                $head = $l; $tail = ''
-                $paren = $l.IndexOf('(')
-                if ($paren -ge 0) { $head = $l.Substring(0, $paren); $tail = $l.Substring($paren) }
-                $short = ($head.Split('.')[-1]) + $tail
-                if ($ran -notcontains $short) { $excluded += $short }
-              }
-            }
-
-            $gp += $passed.Count; $gf += $failed.Count; $gn += $notrun.Count; $gx += $excluded.Count
-            $icon = if ($failed.Count) { ':x:' } else { ':white_check_mark:' }
-            [void]$detail.AppendLine("### $icon $name")
-            [void]$detail.AppendLine('')
-            [void]$detail.AppendLine("$($passed.Count) passed, $($failed.Count) failed, $($notrun.Count) not run, $($excluded.Count) excluded.")
-            [void]$detail.AppendLine('')
-
-            if ($failed.Count) {
-              [void]$detail.AppendLine('| Failed | Message |')
-              [void]$detail.AppendLine('|---|---|')
-              foreach ($t in $failed) {
-                $m = ($t.Output.ErrorInfo.Message -replace '\r?\n', ' ') -replace '\|', '\|'
-                if ($m.Length -gt 300) { $m = $m.Substring(0, 300) + ' ...' }
-                [void]$detail.AppendLine("| ``$($t.testName)`` | $m |")
-              }
-              [void]$detail.AppendLine('')
-            }
-
-            if ($excluded.Count) {
-              [void]$detail.AppendLine("<details><summary>$($excluded.Count) excluded by [Category(&quot;$env:EXTERNAL_CATEGORY&quot;)]</summary>")
-              [void]$detail.AppendLine('')
-              foreach ($t in ($excluded | Sort-Object)) { [void]$detail.AppendLine("- ``$t``") }
-              [void]$detail.AppendLine('')
-              [void]$detail.AppendLine('</details>')
-              [void]$detail.AppendLine('')
-            }
-
-            [void]$detail.AppendLine("<details><summary>All $($results.Count) results that ran</summary>")
-            [void]$detail.AppendLine('')
-            [void]$detail.AppendLine('| Test | Outcome |')
-            [void]$detail.AppendLine('|---|---|')
-            foreach ($t in $results) {
-              $o = switch ($t.outcome) { 'Passed' { 'passed' } 'Failed' { 'failed' } default { 'not run' } }
-              [void]$detail.AppendLine("| ``$($t.testName)`` | $o |")
-            }
-            [void]$detail.AppendLine('')
-            [void]$detail.AppendLine('</details>')
-            [void]$detail.AppendLine('')
-          }
-
-          [void]$sb.AppendLine("**$gp passed, $gf failed, $gn not run, $gx excluded.**")
-          [void]$sb.AppendLine('')
-
-          $head = $sb.ToString()
-          $body = $detail.ToString()
-          if (([Text.Encoding]::UTF8.GetByteCount($head) + [Text.Encoding]::UTF8.GetByteCount($body)) -gt $cap) {
-            # Drop the per-test detail rather than the counts, and say so.
-            $trimmed = New-Object Text.StringBuilder
-            foreach ($line in $body -split "`r?`n") {
-              if ($line -match '^\|.*\|\s*(passed|not run)\s*\|$') { continue }
-              [void]$trimmed.AppendLine($line)
-            }
-            $body = $trimmed.ToString()
-            $head += "> The per-test list was too large for one job summary, so only the counts, the failures and the excluded tests are shown. The full list is in the uploaded test results." + [Environment]::NewLine + [Environment]::NewLine
-          }
-          $text = $head + $body
-          $bytes = [Text.Encoding]::UTF8.GetByteCount($text)
-          if ($bytes -gt $cap) { $text = $text.Substring(0, 400000) + [Environment]::NewLine + '> Truncated.' }
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $text
-          Write-Host "SUMMARYSIZE|bytes=$bytes|capped=$([bool]($bytes -gt $cap))"
-        } catch {
-          Write-Host "::warning title=UnitTests::The test summary could not be built: $($_.Exception.Message). The run itself is unaffected."
-        }
 
     # Coverage is reported, never gated: every step below is continue-on-error
     # and none of them can change the check's outcome.
@@ -654,11 +525,26 @@ runs:
           }
         }'
         dotnet tool restore
-        dotnet tool run reportgenerator -- "-reports:TestResults/*/coverage.cobertura.xml" "-targetdir:CodeCoverage" "-reporttypes:MarkdownSummaryGithub;Cobertura;Html"
-        if (Test-Path CodeCoverage/SummaryGithub.md) {
-          '## Code coverage' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-          '' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-          Get-Content CodeCoverage/SummaryGithub.md | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+        dotnet tool run reportgenerator -- "-reports:TestResults/*/coverage.cobertura.xml" "-targetdir:CodeCoverage" "-reporttypes:Cobertura;Html"
+
+        # The merged Cobertura carries the repository-wide figures, so they are
+        # read here and handed on as two numbers rather than as ReportGenerator's
+        # per-assembly markdown table, which the browsable report already shows.
+        if (Test-Path CodeCoverage/Cobertura.xml) {
+          [xml]$c = Get-Content CodeCoverage/Cobertura.xml -Raw
+          $root = $c.DocumentElement
+          $lv = $root.GetAttribute('lines-valid');    $lc = $root.GetAttribute('lines-covered')
+          $bv = $root.GetAttribute('branches-valid'); $bc = $root.GetAttribute('branches-covered')
+          # No valid branches means the code has no branches, which is not the
+          # same as none of them being covered, so the figure is withheld rather
+          # than reported as zero.
+          if ($lv -and [int]$lv -gt 0) {
+            "line_rate=$([math]::Round(100.0 * [int]$lc / [int]$lv, 1))" | Add-Content -Path $env:GITHUB_OUTPUT
+          }
+          if ($bv -and [int]$bv -gt 0) {
+            "branch_rate=$([math]::Round(100.0 * [int]$bc / [int]$bv, 1))" | Add-Content -Path $env:GITHUB_OUTPUT
+          }
+          Write-Host "COVERAGE|lines=$lc/$lv|branches=$bc/$bv"
         }
         $bytes = (Get-ChildItem CodeCoverage -Recurse -File -EA SilentlyContinue | Measure-Object Length -Sum).Sum
         Write-Host "COVREPORTSIZE|bytes=$bytes|files=$((Get-ChildItem CodeCoverage -Recurse -File -EA SilentlyContinue).Count)"
@@ -676,21 +562,13 @@ runs:
         path: CodeCoverage/
         retention-days: 14
 
-    - name: Link the coverage report
-      if: always() && steps.coverage_report.outputs.artifact-url != ''
-      continue-on-error: true
-      shell: pwsh
-      run: |
-        "" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-        "[Browsable coverage report](${{ steps.coverage_report.outputs.artifact-url }}), line by line, kept for 14 days." |
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY
-
     # Coverage of the lines this pull request changed, computed here from the
     # Cobertura files and the diff. No service, no upload: the repository-wide
     # figure answers "how much of this repository is tested", which barely moves;
     # this one answers "is the code in front of me tested", which is the question
     # a reviewer actually has.
     - name: Changed-lines coverage
+      id: changed_lines
       if: always() && github.event_name == 'pull_request' && hashFiles('TestResults/**/coverage.cobertura.xml') != ''
       continue-on-error: true
       shell: pwsh
@@ -746,21 +624,311 @@ runs:
           if ($t -gt 0) { $rows += [pscustomobject]@{ File = $file; Covered = $c; Coverable = $t }; $tc += $c; $tt += $t }
         }
 
-        '## Coverage of the lines this pull request changed' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-        '' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+        # `computed` separates "this was a pull request and nothing coverable
+        # changed" from "this was not a pull request", which read the same from a
+        # zero on its own. The per-file figures stay in the log: the browsable
+        # report is where a reviewer goes for which line.
+        "computed=true" | Add-Content -Path $env:GITHUB_OUTPUT
+        "covered=$tc"   | Add-Content -Path $env:GITHUB_OUTPUT
+        "coverable=$tt" | Add-Content -Path $env:GITHUB_OUTPUT
         if ($tt -eq 0) {
-          'No changed line in this pull request is a coverable line, so there is nothing to report. A comment-only or test-only change lands here.' |
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY
           Write-Host "CHANGEDLINES|covered=0|coverable=0|pct=n/a|files=0"
         } else {
           $pct = [math]::Round(100.0 * $tc / $tt, 1)
-          "**$tc of $tt changed coverable lines are covered, $pct%.**" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-          '' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-          '| File | Covered | Coverable |' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-          '|---|---:|---:|' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-          foreach ($r in $rows) {
-            "| ``$($r.File)`` | $($r.Covered) | $($r.Coverable) |" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-            Write-Host "CHANGEDFILE|$($r.File)|$($r.Covered)|$($r.Coverable)"
-          }
+          "pct=$pct" | Add-Content -Path $env:GITHUB_OUTPUT
+          foreach ($r in $rows) { Write-Host "CHANGEDFILE|$($r.File)|$($r.Covered)|$($r.Coverable)" }
           Write-Host "CHANGEDLINES|covered=$tc|coverable=$tt|pct=$pct|files=$($rows.Count)"
+        }
+
+    # The whole job summary, written once and last so the page is laid out in
+    # one place. Counts come from the rows the run judged on, names from the
+    # .trx files and the listings kept during the run. Never fails the check: a
+    # reporting step that can red a build is worse than no reporting step.
+    - name: Unit test summary
+      if: always() && steps.test_check.outputs.found == 'true'
+      shell: pwsh
+      env:
+        EXTERNAL_CATEGORY: ${{ inputs.external_category }}
+        ROWS_PATH: ${{ runner.temp }}/ci-unit-tests-rows.json
+        RUN_OUTCOME: ${{ steps.run_tests.outcome }}
+        LINE_RATE: ${{ steps.coverage.outputs.line_rate }}
+        BRANCH_RATE: ${{ steps.coverage.outputs.branch_rate }}
+        CHANGED_COMPUTED: ${{ steps.changed_lines.outputs.computed }}
+        CHANGED_COVERED: ${{ steps.changed_lines.outputs.covered }}
+        CHANGED_COVERABLE: ${{ steps.changed_lines.outputs.coverable }}
+        CHANGED_PCT: ${{ steps.changed_lines.outputs.pct }}
+        COVERAGE_URL: ${{ steps.coverage_report.outputs.artifact-url }}
+        RESULTS_URL: ${{ steps.test_results.outputs.artifact-url }}
+      run: |
+        try {
+          $cap = 900KB   # GitHub caps a step summary at 1 MiB; leave headroom.
+          $nl  = [Environment]::NewLine
+          # Two trailing spaces are a markdown hard break, joined in from a
+          # variable rather than typed at the end of a line so that trimming
+          # trailing whitespace in this file cannot silently join the lines.
+          $br  = '  ' + $nl
+
+          function Num($v) { $n = 0; [void][int]::TryParse([string]$v, [ref]$n); $n }
+
+          # A line inside a fenced block that is itself a fence would end it.
+          function Fence($s) { [string]$s -replace '```', "'''" }
+
+          # key: value, padded to the longest key, inside a fenced block so the
+          # padding survives rendering.
+          function Fixed($pairs) {
+            $w = [int]($pairs.Keys | Measure-Object -Maximum -Property Length).Maximum
+            $out = @('```')
+            foreach ($k in $pairs.Keys) { $out += ($k + ':').PadRight($w + 2) + $pairs[$k] }
+            $out += '```'
+            $out -join $nl
+          }
+
+          # ConvertFrom-Json hands back the whole array as one object, so it is
+          # enumerated with foreach rather than wrapped with @(), which would
+          # produce a single element holding an array.
+          $rows = @()
+          if (Test-Path $env:ROWS_PATH) {
+            foreach ($r in (Get-Content $env:ROWS_PATH -Raw | ConvertFrom-Json)) { $rows += $r }
+          }
+          $trxFiles = @(Get-ChildItem TestResults -Filter *.trx -ErrorAction SilentlyContinue | Sort-Object Name)
+
+          if (-not $rows.Count -and -not $trxFiles.Count) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Unit Tests$nl${nl}No test results were produced."
+            exit 0
+          }
+
+          # An excluded test never reaches the .trx, so it can only be named by
+          # subtracting what ran from what was listed. The listing carries fully
+          # qualified names and the .trx carries short ones, so the comparison is
+          # on the method-and-arguments tail.
+          $projects = @()
+          foreach ($f in $trxFiles) {
+            $name = [IO.Path]::GetFileNameWithoutExtension($f.Name)
+            [xml]$x = Get-Content $f.FullName
+            # A results file with no result at all yields $null, and @($null) is
+            # one element, not none, which would render as a blank test.
+            $results = @($x.TestRun.Results.UnitTestResult | Where-Object { $_ })
+            $excluded = @()
+            $listPath = Join-Path $env:RUNNER_TEMP "listed-$name.txt"
+            if (Test-Path $listPath) {
+              $ran = @($results | ForEach-Object { $_.testName })
+              foreach ($l in (Get-Content $listPath | Where-Object { $_ })) {
+                $head = $l; $tail = ''
+                $paren = $l.IndexOf('(')
+                if ($paren -ge 0) { $head = $l.Substring(0, $paren); $tail = $l.Substring($paren) }
+                $short = ($head.Split('.')[-1]) + $tail
+                if ($ran -notcontains $short) { $excluded += $short }
+              }
+            }
+            $projects += [pscustomobject]@{
+              Name     = $name
+              Results  = $results
+              Failed   = @($results | Where-Object { $_.outcome -eq 'Failed' })
+              NotRun   = @($results | Where-Object { $_.outcome -ne 'Passed' -and $_.outcome -ne 'Failed' })
+              Excluded = @($excluded | Sort-Object)
+            }
+          }
+
+          # The rows are what the run judged on, and they cover projects that
+          # never produced a .trx. Deriving from the results instead only matters
+          # if the run died before writing them.
+          $tDisc = 0; $tPass = 0; $tFail = 0; $tNotRun = 0; $tExcl = 0
+          if ($rows.Count) {
+            foreach ($r in $rows) {
+              $tDisc   += (Num $r.Discovered)
+              $tPass   += (Num $r.Passed)
+              $tFail   += (Num $r.Failed)
+              $tNotRun += (Num $r.NotRun)
+              $tExcl   += (Num $r.Excluded)
+            }
+            $projectCount = $rows.Count
+          } else {
+            foreach ($p in $projects) {
+              $tDisc   += $p.Results.Count + $p.Excluded.Count
+              $tPass   += @($p.Results | Where-Object { $_.outcome -eq 'Passed' }).Count
+              $tFail   += $p.Failed.Count
+              $tNotRun += $p.NotRun.Count
+              $tExcl   += $p.Excluded.Count
+            }
+            $projectCount = $projects.Count
+          }
+
+          $resultWord = switch ($env:RUN_OUTCOME) {
+            'success'   { 'Passed' }
+            'cancelled' { 'Cancelled' }
+            default     { 'Failed' }
+          }
+
+          $sb = New-Object Text.StringBuilder
+          [void]$sb.AppendLine('## Unit Tests')
+          [void]$sb.AppendLine('')
+          [void]$sb.AppendLine((Fixed ([ordered]@{
+            'Result'     = $resultWord
+            'Projects'   = $projectCount
+            'Discovered' = $tDisc
+            'Passed'     = $tPass
+            'Failed'     = $tFail
+            'Not run'    = $tNotRun
+            'Excluded'   = $tExcl
+          })))
+          [void]$sb.AppendLine('')
+
+          if ($projectCount -gt 1 -and $rows.Count) {
+            [void]$sb.AppendLine('| Project | Discovered | Passed | Failed | Not run | Excluded | Result |')
+            [void]$sb.AppendLine('|---|---:|---:|---:|---:|---:|---|')
+            foreach ($r in $rows) {
+              [void]$sb.AppendLine("| $($r.Project) | $($r.Discovered) | $($r.Passed) | $($r.Failed) | $($r.NotRun) | $($r.Excluded) | $($r.Result) |")
+            }
+            [void]$sb.AppendLine('')
+          }
+
+          $allFailed = @()
+          foreach ($p in $projects) {
+            foreach ($t in $p.Failed) { $allFailed += [pscustomobject]@{ Project = $p.Name; Test = $t } }
+          }
+          if ($allFailed.Count) {
+            [void]$sb.AppendLine('### Failures')
+            [void]$sb.AppendLine('')
+            [void]$sb.AppendLine('```')
+            $shown = @($allFailed | Select-Object -First 20)
+            $lastProject = ''
+            $first = $true
+            foreach ($f in $shown) {
+              if (-not $first) { [void]$sb.AppendLine('') }
+              $first = $false
+              if ($projectCount -gt 1 -and $f.Project -ne $lastProject) {
+                [void]$sb.AppendLine((Fence $f.Project))
+                $lastProject = $f.Project
+              }
+              [void]$sb.AppendLine((Fence $f.Test.testName))
+              # The assertion message verbatim, which is already laid out by the
+              # runner so that expected and actual line up under each other.
+              $m = ([string]$f.Test.Output.ErrorInfo.Message -replace "`r", '')
+              $mlines = @($m -split "`n" | ForEach-Object { $_.TrimEnd() })
+              while ($mlines.Count -and -not $mlines[0])                  { $mlines = @($mlines | Select-Object -Skip 1) }
+              while ($mlines.Count -and -not $mlines[$mlines.Count - 1])  { $mlines = @($mlines | Select-Object -First ($mlines.Count - 1)) }
+              foreach ($ml in @($mlines | Select-Object -First 8)) { [void]$sb.AppendLine((Fence $ml)) }
+            }
+            if ($allFailed.Count -gt $shown.Count) {
+              [void]$sb.AppendLine('')
+              [void]$sb.AppendLine("and $($allFailed.Count - $shown.Count) more")
+            }
+            [void]$sb.AppendLine('```')
+            [void]$sb.AppendLine('')
+          }
+
+          if ($tExcl -gt 0) {
+            $exLines = @()
+            foreach ($p in $projects) {
+              if (-not $p.Excluded.Count) { continue }
+              $names = (@($p.Excluded | ForEach-Object { '`' + $_ + '`' }) -join ', ')
+              if ($projectCount -gt 1) { $exLines += "$($p.Name): $names" } else { $exLines += $names }
+            }
+            $verb = if ($tExcl -eq 1) { 'test requires' } else { 'tests require' }
+            [void]$sb.AppendLine('### Excluded')
+            [void]$sb.AppendLine('')
+            if (-not $exLines.Count) {
+              [void]$sb.AppendLine("$tExcl $verb external software")
+            } elseif ($tExcl -gt 10) {
+              [void]$sb.AppendLine("$tExcl $verb external software")
+              [void]$sb.AppendLine('')
+              [void]$sb.AppendLine('<details><summary>Names</summary>')
+              [void]$sb.AppendLine('')
+              [void]$sb.AppendLine(($exLines -join $br))
+              [void]$sb.AppendLine('')
+              [void]$sb.AppendLine('</details>')
+            } elseif ($projectCount -gt 1) {
+              [void]$sb.AppendLine("$tExcl $verb external software" + $br + ($exLines -join $br))
+            } else {
+              [void]$sb.AppendLine("$tExcl $verb external software: " + $exLines[0])
+            }
+            [void]$sb.AppendLine('')
+          }
+
+          if ($tNotRun -gt 0) {
+            $verb = if ($tNotRun -eq 1) { 'test' } else { 'tests' }
+            [void]$sb.AppendLine('### Not run')
+            [void]$sb.AppendLine('')
+            [void]$sb.AppendLine("$tNotRun $verb not executed (ignored or inconclusive).")
+            [void]$sb.AppendLine('')
+            $withNotRun = @($projects | Where-Object { $_.NotRun.Count })
+            if ($withNotRun.Count) {
+              [void]$sb.AppendLine('<details><summary>Names</summary>')
+              [void]$sb.AppendLine('')
+              $w = [int]($withNotRun.Name | Measure-Object -Maximum -Property Length).Maximum
+              [void]$sb.AppendLine('```')
+              foreach ($p in $withNotRun) {
+                foreach ($t in $p.NotRun) {
+                  if ($projectCount -gt 1) { [void]$sb.AppendLine((Fence ($p.Name.PadRight($w + 2) + $t.testName))) }
+                  else                     { [void]$sb.AppendLine((Fence $t.testName)) }
+                }
+              }
+              [void]$sb.AppendLine('```')
+              [void]$sb.AppendLine('')
+              [void]$sb.AppendLine('</details>')
+              [void]$sb.AppendLine('')
+            }
+          }
+
+          $cov = [ordered]@{}
+          if ($env:CHANGED_COMPUTED -eq 'true') {
+            if ((Num $env:CHANGED_COVERABLE) -eq 0) {
+              $cov['Changed lines'] = 'no coverable lines changed'
+            } else {
+              $cov['Changed lines'] = "$($env:CHANGED_COVERED) of $($env:CHANGED_COVERABLE) ($($env:CHANGED_PCT)%)"
+            }
+          }
+          if ($env:LINE_RATE)   { $cov['Line coverage']   = "$($env:LINE_RATE)%" }
+          if ($env:BRANCH_RATE) { $cov['Branch coverage'] = "$($env:BRANCH_RATE)%" }
+          if ($cov.Count) {
+            [void]$sb.AppendLine('### Coverage')
+            [void]$sb.AppendLine('')
+            [void]$sb.AppendLine((Fixed $cov))
+            [void]$sb.AppendLine('')
+          }
+
+          $links = @()
+          if ($env:COVERAGE_URL) { $links += "[Coverage report]($($env:COVERAGE_URL))" }
+          if ($env:RESULTS_URL)  { $links += "[Test results]($($env:RESULTS_URL))" }
+          if ($links.Count) {
+            [void]$sb.AppendLine('### Details')
+            [void]$sb.AppendLine('')
+            [void]$sb.AppendLine(($links -join $br))
+            [void]$sb.AppendLine('')
+          }
+
+          $listed = 0
+          foreach ($p in $projects) { $listed += $p.Results.Count }
+          $all = New-Object Text.StringBuilder
+          if ($listed -gt 0) {
+            [void]$all.AppendLine("<details><summary>All tests ($listed)</summary>")
+            [void]$all.AppendLine('')
+            foreach ($p in $projects) {
+              if (-not $p.Results.Count) { continue }
+              if ($projectCount -gt 1) { [void]$all.AppendLine("#### $($p.Name)"); [void]$all.AppendLine('') }
+              [void]$all.AppendLine('| Test | Outcome |')
+              [void]$all.AppendLine('|---|---|')
+              foreach ($t in $p.Results) {
+                $o = switch ($t.outcome) { 'Passed' { 'passed' } 'Failed' { 'failed' } default { 'not run' } }
+                [void]$all.AppendLine("| ``$($t.testName)`` | $o |")
+              }
+              [void]$all.AppendLine('')
+            }
+            [void]$all.AppendLine('</details>')
+          }
+
+          $head = $sb.ToString()
+          $body = $all.ToString()
+          if (([Text.Encoding]::UTF8.GetByteCount($head) + [Text.Encoding]::UTF8.GetByteCount($body)) -gt $cap) {
+            # Drop the full list, never the counts, the failures or the excluded
+            # names. The list is in the test results artifact either way.
+            $body = 'Test list omitted: over the job summary size limit.' + $nl
+          }
+          $text  = $head + $body
+          $bytes = [Text.Encoding]::UTF8.GetByteCount($text)
+          if ($bytes -gt $cap) { $text = $text.Substring(0, 400000) + $nl + 'Truncated.' }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $text
+          Write-Host "SUMMARYSIZE|bytes=$bytes|capped=$([bool]($bytes -gt $cap))"
+        } catch {
+          Write-Host "::warning title=UnitTests::The test summary could not be built: $($_.Exception.Message). The run itself is unaffected."
         }
