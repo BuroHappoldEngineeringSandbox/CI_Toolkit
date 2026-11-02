@@ -101,7 +101,7 @@ runs:
         # IsTestProject. Source and fixture projects sitting in the same tree
         # carry none of these, which is what keeps them out.
         $candidates = Get-ChildItem -Path $root -Filter "*.csproj" -Recurse -ErrorAction SilentlyContinue |
-          Where-Object { $_.FullName -notmatch '\(bin|obj)\' }
+          Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' }
 
         $projects = @()
         foreach ($c in $candidates) {
