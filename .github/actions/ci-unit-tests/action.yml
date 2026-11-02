@@ -654,12 +654,36 @@ runs:
           }
         }'
         dotnet tool restore
-        dotnet tool run reportgenerator -- "-reports:TestResults/*/coverage.cobertura.xml" "-targetdir:CodeCoverage" "-reporttypes:MarkdownSummaryGithub;Cobertura"
+        dotnet tool run reportgenerator -- "-reports:TestResults/*/coverage.cobertura.xml" "-targetdir:CodeCoverage" "-reporttypes:MarkdownSummaryGithub;Cobertura;Html"
         if (Test-Path CodeCoverage/SummaryGithub.md) {
           '## Code coverage' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
           '' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
           Get-Content CodeCoverage/SummaryGithub.md | Add-Content -Path $env:GITHUB_STEP_SUMMARY
         }
+        $bytes = (Get-ChildItem CodeCoverage -Recurse -File -EA SilentlyContinue | Measure-Object Length -Sum).Sum
+        Write-Host "COVREPORTSIZE|bytes=$bytes|files=$((Get-ChildItem CodeCoverage -Recurse -File -EA SilentlyContinue).Count)"
+
+    # The browsable report, where a reviewer can see which lines are not covered.
+    # Within the coverage steps' continue-on-error: an upload failure cannot
+    # change the check's outcome.
+    - name: Upload the coverage report
+      id: coverage_report
+      if: always() && hashFiles('CodeCoverage/index.html') != ''
+      continue-on-error: true
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: coverage-report-${{ github.run_id }}
+        path: CodeCoverage/
+        retention-days: 14
+
+    - name: Link the coverage report
+      if: always() && steps.coverage_report.outputs.artifact-url != ''
+      continue-on-error: true
+      shell: pwsh
+      run: |
+        "" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+        "[Browsable coverage report](${{ steps.coverage_report.outputs.artifact-url }}), line by line, kept for 14 days." |
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
     # Coverage of the lines this pull request changed, computed here from the
     # Cobertura files and the diff. No service, no upload: the repository-wide
