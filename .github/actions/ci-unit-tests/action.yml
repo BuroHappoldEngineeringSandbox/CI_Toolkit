@@ -46,6 +46,13 @@ inputs:
       of that minor and never crosses into another major.
     required: false
     default: '10.0'
+  coverage_mode:
+    description: >
+      PROBE ONLY. coverlet (current behaviour), coverlet-filtered (restrict to
+      the assemblies this repository builds) or mscollector (Microsoft's
+      collector, Cobertura output, same restriction).
+    required: false
+    default: 'coverlet'
   external_category:
     description: >
       NUnit category excluded from the run. Tests needing software a hosted
@@ -205,6 +212,49 @@ runs:
         }
         Write-Host "::notice title=UnitTests::SDK in use: $(dotnet --version)"
 
+    - name: Build the coverage filter from this repository's own projects
+      id: covfilter
+      if: steps.test_check.outputs.found == 'true'
+      shell: pwsh
+      env:
+        COVERAGE_MODE: ${{ inputs.coverage_mode }}
+        SETTINGS_PATH: ${{ runner.temp }}/cov.runsettings
+      run: |
+        # Assemblies this repository builds, from its own production projects.
+        # Anything else the test host loads is a dependency, and is not what
+        # this repository's coverage figure should be measured against.
+        $own = @(Get-ChildItem -Path . -Filter *.csproj -Recurse -EA SilentlyContinue |
+          Where-Object { $_.FullName -notmatch '\(bin|obj)\' -and $_.FullName -notmatch '\\.ci\' } |
+          ForEach-Object {
+            $xml = Get-Content $_.FullName -Raw
+            if ($xml -match '<AssemblyName>\s*([^<]+?)\s*</AssemblyName>') { $Matches[1] }
+            else { [IO.Path]::GetFileNameWithoutExtension($_.Name) }
+          } | Sort-Object -Unique)
+        Write-Host "::notice title=Coverage::$($own.Count) assembly name(s) from this repository"
+        Write-Host ($own -join ', ')
+
+        $nl = [Environment]::NewLine
+        $mode = $env:COVERAGE_MODE
+        if ($mode -eq 'coverlet-filtered') {
+          $inc = ($own | ForEach-Object { '[' + $_ + ']*' }) -join ','
+          $x  = '<RunSettings><DataCollectionRunSettings><DataCollectors>'
+          $x += '<DataCollector friendlyName="XPlat code coverage"><Configuration>'
+          $x += '<Format>cobertura</Format><Include>' + $inc + '</Include>'
+          $x += '</Configuration></DataCollector>'
+          $x += '</DataCollectors></DataCollectionRunSettings></RunSettings>'
+          Set-Content -Path $env:SETTINGS_PATH -Value $x -Encoding utf8
+        } elseif ($mode -eq 'mscollector') {
+          $paths = ($own | ForEach-Object { '<ModulePath>.*\' + [regex]::Escape($_) + '\.dll$</ModulePath>' }) -join ''
+          $x  = '<RunSettings><DataCollectionRunSettings><DataCollectors>'
+          $x += '<DataCollector friendlyName="Code Coverage"><Configuration>'
+          $x += '<Format>cobertura</Format><CodeCoverage><ModulePaths><Include>'
+          $x += $paths
+          $x += '</Include></ModulePaths></CodeCoverage>'
+          $x += '</Configuration></DataCollector>'
+          $x += '</DataCollectors></DataCollectionRunSettings></RunSettings>'
+          Set-Content -Path $env:SETTINGS_PATH -Value $x -Encoding utf8
+        }
+        if (Test-Path $env:SETTINGS_PATH) { Write-Host (Get-Content $env:SETTINGS_PATH -Raw) }
     # Per-project invocation, not `dotnet test <sln>`. BHoM `_Tests.sln` files
     # map every project's `Test|Any CPU` to `Debug|Any CPU`, so a solution-level
     # build silently compiles Debug and the test host (which only has an
@@ -227,6 +277,8 @@ runs:
         DOTNET_CLI_UI_LANGUAGE: en
         PROJECT_LIST: ${{ runner.temp }}/ci-unit-tests-projects.txt
         EXTERNAL_CATEGORY: ${{ inputs.external_category }}
+        COVERAGE_MODE: ${{ inputs.coverage_mode }}
+        SETTINGS_PATH: ${{ runner.temp }}/cov.runsettings
       run: |
         $projects = @(Get-Content $env:PROJECT_LIST | Where-Object { $_ })
         $category = $env:EXTERNAL_CATEGORY
@@ -330,10 +382,18 @@ runs:
           }
 
           Write-Host "::group::dotnet test $name --filter $filter"
+          $covArgs = switch ($env:COVERAGE_MODE) {
+            'coverlet-filtered' { @('--collect:XPlat Code Coverage', '--settings', $env:SETTINGS_PATH) }
+            'mscollector'       { @('--collect:Code Coverage',       '--settings', $env:SETTINGS_PATH) }
+            default             { @('--collect:XPlat Code Coverage') }
+          }
+          $swProj = [Diagnostics.Stopwatch]::StartNew()
           dotnet test $proj -c Test --no-build --filter $filter `
-            --collect:"XPlat Code Coverage" `
+            @covArgs `
             --logger "trx;LogFileName=$name.trx" --results-directory TestResults
           $exit = $LASTEXITCODE
+          $swProj.Stop()
+          Write-Host "COVTIME|$name|ms=$($swProj.ElapsedMilliseconds)"
           Write-Host "::endgroup::"
 
           $trx = Join-Path "TestResults" "$name.trx"
@@ -480,7 +540,7 @@ runs:
 
     - name: Generate code coverage report
       id: generate_coverage
-      if: always() && hashFiles('TestResults/**/coverage.cobertura.xml') != ''
+      if: always() && hashFiles('TestResults/**/*cobertura.xml') != ''
       continue-on-error: true
       shell: pwsh
       run: |
@@ -496,7 +556,7 @@ runs:
           }
         }'
         dotnet tool restore
-        dotnet tool run reportgenerator -- "-reports:TestResults/*/coverage.cobertura.xml" "-targetdir:CodeCoverage" "-reporttypes:MarkdownSummaryGithub;Cobertura"
+        dotnet tool run reportgenerator -- "-reports:TestResults/**/*cobertura.xml" "-targetdir:CodeCoverage" "-reporttypes:MarkdownSummaryGithub;Cobertura"
         Get-Content CodeCoverage/SummaryGithub.md | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
     - name: Add Coverage PR Comment
