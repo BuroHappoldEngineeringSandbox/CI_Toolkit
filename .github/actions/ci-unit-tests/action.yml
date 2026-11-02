@@ -101,7 +101,7 @@ runs:
         # IsTestProject. Source and fixture projects sitting in the same tree
         # carry none of these, which is what keeps them out.
         $candidates = Get-ChildItem -Path $root -Filter "*.csproj" -Recurse -ErrorAction SilentlyContinue |
-          Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' }
+          Where-Object { $_.FullName -notmatch '\(bin|obj)\' }
 
         $projects = @()
         foreach ($c in $candidates) {
@@ -224,7 +224,7 @@ runs:
         # Anything else the test host loads is a dependency, and is not what
         # this repository's coverage figure should be measured against.
         $own = @(Get-ChildItem -Path . -Filter *.csproj -Recurse -EA SilentlyContinue |
-          Where-Object { $_.FullName -notmatch '\(bin|obj)\' -and $_.FullName -notmatch '\\.ci\' } |
+          Where-Object { $p = $_.FullName.Split([IO.Path]::DirectorySeparatorChar); $p -notcontains 'bin' -and $p -notcontains 'obj' -and $p -notcontains '.ci' } |
           ForEach-Object {
             $xml = Get-Content $_.FullName -Raw
             if ($xml -match '<AssemblyName>\s*([^<]+?)\s*</AssemblyName>') { $Matches[1] }
@@ -244,7 +244,7 @@ runs:
           $x += '</DataCollectors></DataCollectionRunSettings></RunSettings>'
           Set-Content -Path $env:SETTINGS_PATH -Value $x -Encoding utf8
         } elseif ($mode -eq 'mscollector') {
-          $paths = ($own | ForEach-Object { '<ModulePath>.*\' + [regex]::Escape($_) + '\.dll$</ModulePath>' }) -join ''
+          $paths = ($own | ForEach-Object { '<ModulePath>.*' + [regex]::Escape($_) + '\.dll$</ModulePath>' }) -join ''
           $x  = '<RunSettings><DataCollectionRunSettings><DataCollectors>'
           $x += '<DataCollector friendlyName="Code Coverage"><Configuration>'
           $x += '<Format>cobertura</Format><CodeCoverage><ModulePaths><Include>'
