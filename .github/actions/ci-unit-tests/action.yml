@@ -16,12 +16,6 @@ inputs:
     description: Fallback token when App credentials are absent.
     required: false
     default: ""
-  pr_number:
-    description: >
-      PR number in the caller repo. Proxy workflows pass this so the
-      coverage comment targets the right PR in cross-org contexts.
-    required: false
-    default: ""
   test_toolkit_repo:
     description: >
       Test_Toolkit repository (owner/repo). Override to point at a fork.
@@ -60,7 +54,9 @@ runs:
     - name: Checkout caller repo
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
-        fetch-depth: 1
+        # 2, not 1: changed-lines coverage diffs HEAD^1..HEAD on the merge ref,
+        # the same range and for the same reason as compute-changed-files.
+        fetch-depth: 2
 
     - name: Compute changed files
       id: changed
@@ -205,6 +201,42 @@ runs:
         }
         Write-Host "::notice title=UnitTests::SDK in use: $(dotnet --version)"
 
+    # Coverlet instruments whatever the test host loads that has a PDB beside
+    # it. For a repository whose dependencies arrive pre-built that is already
+    # just its own code, and for one that builds its dependencies in-tree it is
+    # already almost all its own code, so this filter is not a correction to a
+    # wrong figure. It is here so the set of measured assemblies is declared
+    # rather than discovered, and cannot drift when a dependency changes.
+    - name: Build the coverage filter from this repository's own projects
+      id: covfilter
+      if: steps.test_check.outputs.found == 'true'
+      shell: pwsh
+      env:
+        SETTINGS_PATH: ${{ runner.temp }}/coverage.runsettings
+      run: |
+        $own = @(Get-ChildItem -Path . -Filter *.csproj -Recurse -ErrorAction SilentlyContinue |
+          Where-Object { $p = $_.FullName.Split([IO.Path]::DirectorySeparatorChar); $p -notcontains 'bin' -and $p -notcontains 'obj' -and $p -notcontains '.ci' } |
+          ForEach-Object {
+            $xml = Get-Content $_.FullName -Raw
+            if ($xml -match '<AssemblyName>\s*([^<]+?)\s*</AssemblyName>') { $Matches[1] }
+            else { [IO.Path]::GetFileNameWithoutExtension($_.Name) }
+          } | Sort-Object -Unique)
+
+        if (-not $own) {
+          Write-Host "::notice title=UnitTests::No production project found, so coverage is left unfiltered."
+          exit 0
+        }
+        Write-Host "::notice title=UnitTests::Coverage restricted to $($own.Count) assembly name(s) this repository builds"
+        Write-Host ($own -join ', ')
+
+        $inc = ($own | ForEach-Object { '[' + $_ + ']*' }) -join ','
+        $x  = '<RunSettings><DataCollectionRunSettings><DataCollectors>'
+        $x += '<DataCollector friendlyName="XPlat code coverage"><Configuration>'
+        $x += '<Format>cobertura</Format><Include>' + $inc + '</Include>'
+        $x += '</Configuration></DataCollector>'
+        $x += '</DataCollectors></DataCollectionRunSettings></RunSettings>'
+        Set-Content -Path $env:SETTINGS_PATH -Value $x -Encoding utf8
+
     # Per-project invocation, not `dotnet test <sln>`. BHoM `_Tests.sln` files
     # map every project's `Test|Any CPU` to `Debug|Any CPU`, so a solution-level
     # build silently compiles Debug and the test host (which only has an
@@ -227,6 +259,7 @@ runs:
         DOTNET_CLI_UI_LANGUAGE: en
         PROJECT_LIST: ${{ runner.temp }}/ci-unit-tests-projects.txt
         EXTERNAL_CATEGORY: ${{ inputs.external_category }}
+        SETTINGS_PATH: ${{ runner.temp }}/coverage.runsettings
       run: |
         $projects = @(Get-Content $env:PROJECT_LIST | Where-Object { $_ })
         $category = $env:EXTERNAL_CATEGORY
@@ -311,6 +344,11 @@ runs:
           }).Count -gt 0
 
           $discovered = $listing.Count
+          # Keep the listing. It is the only record of a test that the filter
+          # excluded: an excluded test never reaches the .trx, so the summary
+          # cannot name it from results alone.
+          $listPath = Join-Path $env:RUNNER_TEMP "listed-$name.txt"
+          $listing | ForEach-Object { $_.Trim() } | Set-Content -Path $listPath -Encoding utf8
           $listRead   = $false
           if ($listExit -eq 0 -and -not $brokenHost) {
             if ($discovered -gt 0)                        { $listRead = $true }
@@ -330,9 +368,15 @@ runs:
           }
 
           Write-Host "::group::dotnet test $name --filter $filter"
-          dotnet test $proj -c Test --no-build --filter $filter `
-            --collect:"XPlat Code Coverage" `
-            --logger "trx;LogFileName=$name.trx" --results-directory TestResults
+          if (Test-Path $env:SETTINGS_PATH) {
+            dotnet test $proj -c Test --no-build --filter $filter `
+              --collect:"XPlat Code Coverage" --settings $env:SETTINGS_PATH `
+              --logger "trx;LogFileName=$name.trx" --results-directory TestResults
+          } else {
+            dotnet test $proj -c Test --no-build --filter $filter `
+              --collect:"XPlat Code Coverage" `
+              --logger "trx;LogFileName=$name.trx" --results-directory TestResults
+          }
           $exit = $LASTEXITCODE
           Write-Host "::endgroup::"
 
@@ -478,8 +522,122 @@ runs:
         path: TestResults/
         retention-days: 7
 
-    - name: Generate code coverage report
-      id: generate_coverage
+    # Every test's result, named, from the .trx files plus the listings kept
+    # during the run. Never fails the check: a reporting step that can red a
+    # build is worse than no reporting step.
+    - name: Unit test summary
+      if: always() && steps.test_check.outputs.found == 'true'
+      shell: pwsh
+      env:
+        EXTERNAL_CATEGORY: ${{ inputs.external_category }}
+      run: |
+        try {
+          $cap = 900KB   # GitHub caps a step summary at 1 MiB; leave headroom.
+          $sb  = New-Object Text.StringBuilder
+          [void]$sb.AppendLine('## Unit tests')
+          [void]$sb.AppendLine('')
+
+          $trxFiles = @(Get-ChildItem TestResults -Filter *.trx -ErrorAction SilentlyContinue | Sort-Object Name)
+          if (-not $trxFiles) {
+            [void]$sb.AppendLine('No test results were produced.')
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $sb.ToString()
+            exit 0
+          }
+
+          $detail = New-Object Text.StringBuilder
+          $gp = 0; $gf = 0; $gn = 0; $gx = 0
+          foreach ($f in $trxFiles) {
+            $name = [IO.Path]::GetFileNameWithoutExtension($f.Name)
+            [xml]$x = Get-Content $f.FullName
+            $results = @($x.TestRun.Results.UnitTestResult)
+            $passed  = @($results | Where-Object { $_.outcome -eq 'Passed' })
+            $failed  = @($results | Where-Object { $_.outcome -eq 'Failed' })
+            $notrun  = @($results | Where-Object { $_.outcome -ne 'Passed' -and $_.outcome -ne 'Failed' })
+
+            # Excluded = listed before the filter, absent from the results after
+            # it. The listing carries fully qualified names and the .trx carries
+            # short ones, so compare on the method-and-arguments tail.
+            $excluded = @()
+            $listPath = Join-Path $env:RUNNER_TEMP "listed-$name.txt"
+            if (Test-Path $listPath) {
+              $ran = @($results | ForEach-Object { $_.testName })
+              foreach ($l in (Get-Content $listPath | Where-Object { $_ })) {
+                $head = $l; $tail = ''
+                $paren = $l.IndexOf('(')
+                if ($paren -ge 0) { $head = $l.Substring(0, $paren); $tail = $l.Substring($paren) }
+                $short = ($head.Split('.')[-1]) + $tail
+                if ($ran -notcontains $short) { $excluded += $short }
+              }
+            }
+
+            $gp += $passed.Count; $gf += $failed.Count; $gn += $notrun.Count; $gx += $excluded.Count
+            $icon = if ($failed.Count) { ':x:' } else { ':white_check_mark:' }
+            [void]$detail.AppendLine("### $icon $name")
+            [void]$detail.AppendLine('')
+            [void]$detail.AppendLine("$($passed.Count) passed, $($failed.Count) failed, $($notrun.Count) not run, $($excluded.Count) excluded.")
+            [void]$detail.AppendLine('')
+
+            if ($failed.Count) {
+              [void]$detail.AppendLine('| Failed | Message |')
+              [void]$detail.AppendLine('|---|---|')
+              foreach ($t in $failed) {
+                $m = ($t.Output.ErrorInfo.Message -replace '\r?\n', ' ') -replace '\|', '\|'
+                if ($m.Length -gt 300) { $m = $m.Substring(0, 300) + ' ...' }
+                [void]$detail.AppendLine("| ``$($t.testName)`` | $m |")
+              }
+              [void]$detail.AppendLine('')
+            }
+
+            if ($excluded.Count) {
+              [void]$detail.AppendLine("<details><summary>$($excluded.Count) excluded by [Category(&quot;$env:EXTERNAL_CATEGORY&quot;)]</summary>")
+              [void]$detail.AppendLine('')
+              foreach ($t in ($excluded | Sort-Object)) { [void]$detail.AppendLine("- ``$t``") }
+              [void]$detail.AppendLine('')
+              [void]$detail.AppendLine('</details>')
+              [void]$detail.AppendLine('')
+            }
+
+            [void]$detail.AppendLine("<details><summary>All $($results.Count) results that ran</summary>")
+            [void]$detail.AppendLine('')
+            [void]$detail.AppendLine('| Test | Outcome |')
+            [void]$detail.AppendLine('|---|---|')
+            foreach ($t in $results) {
+              $o = switch ($t.outcome) { 'Passed' { 'passed' } 'Failed' { 'failed' } default { 'not run' } }
+              [void]$detail.AppendLine("| ``$($t.testName)`` | $o |")
+            }
+            [void]$detail.AppendLine('')
+            [void]$detail.AppendLine('</details>')
+            [void]$detail.AppendLine('')
+          }
+
+          [void]$sb.AppendLine("**$gp passed, $gf failed, $gn not run, $gx excluded.**")
+          [void]$sb.AppendLine('')
+
+          $head = $sb.ToString()
+          $body = $detail.ToString()
+          if (([Text.Encoding]::UTF8.GetByteCount($head) + [Text.Encoding]::UTF8.GetByteCount($body)) -gt $cap) {
+            # Drop the per-test detail rather than the counts, and say so.
+            $trimmed = New-Object Text.StringBuilder
+            foreach ($line in $body -split "`r?`n") {
+              if ($line -match '^\| ``' -and $line -notmatch '\| (failed|excluded)') { continue }
+              [void]$trimmed.AppendLine($line)
+            }
+            $body = $trimmed.ToString()
+            $head += "> The per-test list was too large for one job summary, so only the counts, the failures and the excluded tests are shown. The full list is in the uploaded test results." + [Environment]::NewLine + [Environment]::NewLine
+          }
+          $text = $head + $body
+          $bytes = [Text.Encoding]::UTF8.GetByteCount($text)
+          if ($bytes -gt $cap) { $text = $text.Substring(0, 400000) + [Environment]::NewLine + '> Truncated.' }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $text
+          Write-Host "SUMMARYSIZE|bytes=$bytes|capped=$([bool]($bytes -gt $cap))"
+        } catch {
+          Write-Host "::warning title=UnitTests::The test summary could not be built: $($_.Exception.Message). The run itself is unaffected."
+        }
+
+    # Coverage is reported, never gated: every step below is continue-on-error
+    # and none of them can change the check's outcome.
+    - name: Code coverage
+      id: coverage
       if: always() && hashFiles('TestResults/**/coverage.cobertura.xml') != ''
       continue-on-error: true
       shell: pwsh
@@ -497,14 +655,88 @@ runs:
         }'
         dotnet tool restore
         dotnet tool run reportgenerator -- "-reports:TestResults/*/coverage.cobertura.xml" "-targetdir:CodeCoverage" "-reporttypes:MarkdownSummaryGithub;Cobertura"
-        Get-Content CodeCoverage/SummaryGithub.md | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+        if (Test-Path CodeCoverage/SummaryGithub.md) {
+          '## Code coverage' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          '' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          Get-Content CodeCoverage/SummaryGithub.md | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+        }
 
-    - name: Add Coverage PR Comment
-      if: always() && hashFiles('CodeCoverage/SummaryGithub.md') != '' && (github.event_name == 'pull_request' || inputs.pr_number)
+    # Coverage of the lines this pull request changed, computed here from the
+    # Cobertura files and the diff. No service, no upload: the repository-wide
+    # figure answers "how much of this repository is tested", which barely moves;
+    # this one answers "is the code in front of me tested", which is the question
+    # a reviewer actually has.
+    - name: Changed-lines coverage
+      if: always() && github.event_name == 'pull_request' && hashFiles('TestResults/**/coverage.cobertura.xml') != ''
       continue-on-error: true
-      uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
-      with:
-        recreate: false
-        path: CodeCoverage/SummaryGithub.md
-        number: ${{ inputs.pr_number || github.event.pull_request.number }}
-        GITHUB_TOKEN: ${{ steps.dep-token.outputs.token }}
+      shell: pwsh
+      run: |
+        # HEAD^1..HEAD on the merge ref, the same range and for the same reason
+        # as compute-changed-files: base.sha trails the base tip.
+        if (-not (git rev-parse --verify --quiet 'HEAD^1')) { git fetch --depth=2 origin (git rev-parse HEAD) | Out-Null }
+        if (-not (git rev-parse --verify --quiet 'HEAD^1')) {
+          Write-Host "::notice title=Coverage::No diff base, so changed-lines coverage was not computed."
+          exit 0
+        }
+
+        # changed[file] = set of added or modified line numbers
+        $changed = @{}
+        $current = $null
+        foreach ($line in (git diff --unified=0 'HEAD^1' 'HEAD' -- '*.cs')) {
+          if ($line -match '^\+\+\+ b/(.+)$') { $current = $Matches[1]; continue }
+          if ($line -match '^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@') {
+            if (-not $current) { continue }
+            $start = [int]$Matches[1]
+            $len   = if ($Matches[2]) { [int]$Matches[2] } else { 1 }
+            if (-not $changed.ContainsKey($current)) { $changed[$current] = @{} }
+            for ($i = 0; $i -lt $len; $i++) { $changed[$current][$start + $i] = $true }
+          }
+        }
+
+        # coverable[file][line] = hits, from every Cobertura report
+        $cov = @{}
+        foreach ($f in (Get-ChildItem TestResults -Recurse -Filter coverage.cobertura.xml -ErrorAction SilentlyContinue)) {
+          [xml]$x = Get-Content $f.FullName
+          $roots = @($x.coverage.sources.source)
+          foreach ($cls in $x.SelectNodes('//class')) {
+            $fn = $cls.filename
+            foreach ($r in $roots) { if ($r -and $fn.StartsWith($r)) { $fn = $fn.Substring($r.Length) } }
+            $fn = ($fn -replace '\\', '/').TrimStart('/')
+            foreach ($l in $cls.SelectNodes('.//line')) {
+              $n = [int]$l.number
+              if (-not $cov.ContainsKey($fn)) { $cov[$fn] = @{} }
+              $h = [int]$l.hits
+              if (-not $cov[$fn].ContainsKey($n) -or $h -gt $cov[$fn][$n]) { $cov[$fn][$n] = $h }
+            }
+          }
+        }
+
+        $rows = @(); $tc = 0; $tt = 0
+        foreach ($file in ($changed.Keys | Sort-Object)) {
+          $match = $cov.Keys | Where-Object { $_ -eq $file -or $_.EndsWith('/' + $file) -or $file.EndsWith('/' + $_) } | Select-Object -First 1
+          if (-not $match) { continue }
+          $c = 0; $t = 0
+          foreach ($n in $changed[$file].Keys) {
+            if ($cov[$match].ContainsKey($n)) { $t++; if ($cov[$match][$n] -gt 0) { $c++ } }
+          }
+          if ($t -gt 0) { $rows += [pscustomobject]@{ File = $file; Covered = $c; Coverable = $t }; $tc += $c; $tt += $t }
+        }
+
+        '## Coverage of the lines this pull request changed' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+        '' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+        if ($tt -eq 0) {
+          'No changed line in this pull request is a coverable line, so there is nothing to report. A comment-only or test-only change lands here.' |
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          Write-Host "CHANGEDLINES|covered=0|coverable=0|pct=n/a|files=0"
+        } else {
+          $pct = [math]::Round(100.0 * $tc / $tt, 1)
+          "**$tc of $tt changed coverable lines are covered, $pct%.**" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          '' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          '| File | Covered | Coverable |' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          '|---|---:|---:|' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          foreach ($r in $rows) {
+            "| ``$($r.File)`` | $($r.Covered) | $($r.Coverable) |" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+            Write-Host "CHANGEDFILE|$($r.File)|$($r.Covered)|$($r.Coverable)"
+          }
+          Write-Host "CHANGEDLINES|covered=$tc|coverable=$tt|pct=$pct|files=$($rows.Count)"
+        }
