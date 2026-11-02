@@ -527,24 +527,49 @@ runs:
         dotnet tool restore
         dotnet tool run reportgenerator -- "-reports:TestResults/*/coverage.cobertura.xml" "-targetdir:CodeCoverage" "-reporttypes:Cobertura;Html"
 
-        # The merged Cobertura carries the repository-wide figures, so they are
-        # read here and handed on as two numbers rather than as ReportGenerator's
-        # per-assembly markdown table, which the browsable report already shows.
+        # The merged Cobertura carries the repository-wide figures and the
+        # per-assembly breakdown, so both are read here and handed on as
+        # numbers. ReportGenerator's own markdown reports percentages per class
+        # without counts, which is neither the shape nor the detail wanted.
         if (Test-Path CodeCoverage/Cobertura.xml) {
+          $inv = [cultureinfo]::InvariantCulture
+          # One decimal everywhere, so a whole number reads 7.0% in the headline
+          # and in the table rather than 7% in one and 7.0% in the other.
+          # Null when there is nothing to divide by: no valid branches means the
+          # code has no branches, which is not the same as none being covered.
+          function Pct($cov, $val) {
+            if ($val -gt 0) { ([math]::Round(100.0 * $cov / $val, 1)).ToString('0.0', $inv) } else { $null }
+          }
+
           [xml]$c = Get-Content CodeCoverage/Cobertura.xml -Raw
           $root = $c.DocumentElement
-          $lv = $root.GetAttribute('lines-valid');    $lc = $root.GetAttribute('lines-covered')
-          $bv = $root.GetAttribute('branches-valid'); $bc = $root.GetAttribute('branches-covered')
-          # No valid branches means the code has no branches, which is not the
-          # same as none of them being covered, so the figure is withheld rather
-          # than reported as zero.
-          if ($lv -and [int]$lv -gt 0) {
-            "line_rate=$([math]::Round(100.0 * [int]$lc / [int]$lv, 1))" | Add-Content -Path $env:GITHUB_OUTPUT
+          $lv = [int]$root.GetAttribute('lines-valid');    $lc = [int]$root.GetAttribute('lines-covered')
+          $bv = [int]$root.GetAttribute('branches-valid'); $bc = [int]$root.GetAttribute('branches-covered')
+          if ((Pct $lc $lv)) { "line_rate=$(Pct $lc $lv)"   | Add-Content -Path $env:GITHUB_OUTPUT }
+          if ((Pct $bc $bv)) { "branch_rate=$(Pct $bc $bv)" | Add-Content -Path $env:GITHUB_OUTPUT }
+
+          # Cobertura puts a rate on each package but no counts, so the lines are
+          # walked. What that comes to is the root's own figures, which is what
+          # stops the table and the headline above it from disagreeing.
+          $asm = @()
+          foreach ($pkg in $c.SelectNodes('/coverage/packages/package')) {
+            $plc = 0; $plv = 0; $pbc = 0; $pbv = 0
+            foreach ($ln in $pkg.SelectNodes('./classes/class/lines/line')) {
+              $plv++
+              if ([int]$ln.GetAttribute('hits') -gt 0) { $plc++ }
+              if ($ln.GetAttribute('branch') -eq 'true' -and
+                  $ln.GetAttribute('condition-coverage') -match '\((\d+)/(\d+)\)') {
+                $pbc += [int]$Matches[1]; $pbv += [int]$Matches[2]
+              }
+            }
+            $asm += [pscustomobject]@{
+              Name = $pkg.GetAttribute('name'); Line = (Pct $plc $plv); Branch = (Pct $pbc $pbv)
+              Covered = $plc; Coverable = $plv
+            }
           }
-          if ($bv -and [int]$bv -gt 0) {
-            "branch_rate=$([math]::Round(100.0 * [int]$bc / [int]$bv, 1))" | Add-Content -Path $env:GITHUB_OUTPUT
-          }
-          Write-Host "COVERAGE|lines=$lc/$lv|branches=$bc/$bv"
+          $asm | ConvertTo-Json -Depth 3 -AsArray |
+            Set-Content -Path (Join-Path $env:RUNNER_TEMP 'ci-unit-tests-assemblies.json') -Encoding utf8
+          Write-Host "COVERAGE|lines=$lc/$lv|branches=$bc/$bv|assemblies=$($asm.Count)"
         }
         $bytes = (Get-ChildItem CodeCoverage -Recurse -File -EA SilentlyContinue | Measure-Object Length -Sum).Sum
         Write-Host "COVREPORTSIZE|bytes=$bytes|files=$((Get-ChildItem CodeCoverage -Recurse -File -EA SilentlyContinue).Count)"
@@ -650,6 +675,7 @@ runs:
       env:
         EXTERNAL_CATEGORY: ${{ inputs.external_category }}
         ROWS_PATH: ${{ runner.temp }}/ci-unit-tests-rows.json
+        ASSEMBLIES_PATH: ${{ runner.temp }}/ci-unit-tests-assemblies.json
         RUN_OUTCOME: ${{ steps.run_tests.outcome }}
         LINE_RATE: ${{ steps.coverage.outputs.line_rate }}
         BRANCH_RATE: ${{ steps.coverage.outputs.branch_rate }}
@@ -885,6 +911,28 @@ runs:
             [void]$sb.AppendLine('')
             [void]$sb.AppendLine((Fixed $cov))
             [void]$sb.AppendLine('')
+
+            # Per assembly, collapsed, and only where there is more than one to
+            # compare. On a single-assembly repository every row would repeat
+            # the headline.
+            $asm = @()
+            if (Test-Path $env:ASSEMBLIES_PATH) {
+              foreach ($a in (Get-Content $env:ASSEMBLIES_PATH -Raw | ConvertFrom-Json)) { $asm += $a }
+            }
+            if ($asm.Count -gt 1) {
+              [void]$sb.AppendLine("<details><summary>Coverage by assembly ($($asm.Count))</summary>")
+              [void]$sb.AppendLine('')
+              [void]$sb.AppendLine('| Assembly | Line | Branch | Lines |')
+              [void]$sb.AppendLine('|---|---:|---:|---:|')
+              foreach ($a in ($asm | Sort-Object Name)) {
+                $l = if ($a.Line)   { "$($a.Line)%" }   else { '-' }
+                $b = if ($a.Branch) { "$($a.Branch)%" } else { '-' }
+                [void]$sb.AppendLine("| $($a.Name) | $l | $b | $($a.Covered) / $($a.Coverable) |")
+              }
+              [void]$sb.AppendLine('')
+              [void]$sb.AppendLine('</details>')
+              [void]$sb.AppendLine('')
+            }
           }
 
           $links = @()
