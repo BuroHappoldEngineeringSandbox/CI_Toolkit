@@ -410,10 +410,10 @@ runs:
           if ($collect) {
             dotnet test $proj -c Test --no-build --filter $filter `
               --collect:"XPlat Code Coverage" --settings $env:SETTINGS_PATH `
-              --logger "trx;LogFileName=$name.trx" --results-directory TestResults
+              --logger "trx;LogFileName=$name.trx" --logger "html;LogFileName=$name.html" --results-directory TestResults
           } else {
             dotnet test $proj -c Test --no-build --filter $filter `
-              --logger "trx;LogFileName=$name.trx" --results-directory TestResults
+              --logger "trx;LogFileName=$name.trx" --logger "html;LogFileName=$name.html" --results-directory TestResults
           }
           $exit = $LASTEXITCODE
           Write-Host "::endgroup::"
@@ -741,6 +741,23 @@ runs:
         if ($LASTEXITCODE -ne 0) { throw "ReportGenerator could not be installed (exit $LASTEXITCODE)." }
         & (Join-Path $tools 'reportgenerator') "-reports:$env:MERGED_PATH" "-targetdir:CodeCoverage" "-reporttypes:Html"
         if ($LASTEXITCODE -ne 0) { throw "ReportGenerator failed (exit $LASTEXITCODE)." }
+        # PROBE ONLY: candidate formats.
+        $rg = Join-Path $tools 'reportgenerator'
+        & $rg "-reports:$env:MERGED_PATH" "-targetdir:CovSummary" "-reporttypes:HtmlSummary"
+        & $rg "-reports:$env:MERGED_PATH" "-targetdir:CovInline"  "-reporttypes:HtmlInline"
+        & $rg "-reports:$env:MERGED_PATH" "-targetdir:CovMht"     "-reporttypes:MHtml"
+        Remove-Item CovInline/index.htm -ErrorAction SilentlyContinue
+        $out = Join-Path $env:RUNNER_TEMP 'probe'
+        New-Item -ItemType Directory -Force $out | Out-Null
+        Copy-Item CovSummary/index.html (Join-Path $out 'coverage-summary.html')
+        Copy-Item (Get-ChildItem CovMht -Filter *.mht | Select-Object -First 1).FullName (Join-Path $out 'coverage.mht')
+        $first = Get-ChildItem TestResults -Filter *.html | Sort-Object Name | Select-Object -First 1
+        if ($first) { Copy-Item $first.FullName (Join-Path $out 'tests.html') }
+        foreach ($d in 'CodeCoverage','CovSummary','CovInline','CovMht') {
+          $f = @(Get-ChildItem $d -Recurse -File)
+          Write-Host "PROBEFMT|$d|files=$($f.Count)|bytes=$(($f | Measure-Object Length -Sum).Sum)"
+        }
+        Get-ChildItem TestResults -Filter *.html | ForEach-Object { Write-Host "PROBEHTMLLOG|$($_.Name)|$($_.Length)" }
         $files = @(Get-ChildItem CodeCoverage -Recurse -File -ErrorAction SilentlyContinue)
         Write-Host "COVREPORTSIZE|bytes=$(($files | Measure-Object Length -Sum).Sum)|files=$($files.Count)"
 
@@ -755,6 +772,51 @@ runs:
         name: coverage-report-${{ github.run_id }}
         path: CodeCoverage/
         retention-days: 14
+
+    - name: PROBE coverage summary, single file
+      if: always()
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        path: ${{ runner.temp }}/probe/coverage-summary.html
+        archive: false
+        retention-days: 3
+
+    - name: PROBE coverage MHtml, single file
+      if: always()
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        path: ${{ runner.temp }}/probe/coverage.mht
+        archive: false
+        retention-days: 3
+
+    - name: PROBE test results html, single file
+      if: always()
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        path: ${{ runner.temp }}/probe/tests.html
+        archive: false
+        retention-days: 3
+
+    - name: PROBE coverage HtmlInline, zipped
+      if: always()
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: probe-coverage-inline-${{ github.run_id }}
+        path: CovInline/
+        retention-days: 3
+
+    - name: PROBE test results html, all projects zipped
+      if: always()
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: probe-tests-html-${{ github.run_id }}
+        path: TestResults/*.html
+        retention-days: 3
 
     # Coverage of the lines this pull request changed, from the union above and
     # the diff. No service, no upload: the repository-wide figure answers "how
