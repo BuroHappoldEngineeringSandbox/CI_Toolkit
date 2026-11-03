@@ -573,6 +573,7 @@ runs:
       env:
         ASSEMBLIES_PATH: ${{ runner.temp }}/ci-unit-tests-assemblies.json
         LINES_PATH: ${{ runner.temp }}/ci-unit-tests-coverage-lines.json
+        MERGED_PATH: ${{ runner.temp }}/ci-unit-tests-merged.cobertura.xml
       run: |
         $inv = [cultureinfo]::InvariantCulture
         # One decimal everywhere, so a whole number reads 7.0% in the headline
@@ -594,14 +595,20 @@ runs:
         # highest count in any one report: Cobertura does not say which branch
         # was taken, so two reports covering different branches of one line
         # count once rather than being added.
-        $union = @{}
+        $union    = @{}
+        $classes  = @{}   # "package`nclass`nfilename" -> line -> same triple, for the merged report
+        $allRoots = [Collections.Generic.List[string]]::new()
         foreach ($r in $reports) {
           [xml]$x = Get-Content -Path $r -Raw -ErrorAction Stop
           $roots = @($x.coverage.sources.source | Where-Object { $_ })
+          foreach ($root in $roots) { if (-not $allRoots.Contains($root)) { $allRoots.Add($root) } }
           foreach ($pkg in $x.SelectNodes('/coverage/packages/package')) {
             $pn = $pkg.GetAttribute('name')
             foreach ($cls in $pkg.SelectNodes('./classes/class')) {
               $fn = $cls.GetAttribute('filename')
+              $ck = $pn + "`n" + $cls.GetAttribute('name') + "`n" + $fn
+              if (-not $classes.ContainsKey($ck)) { $classes[$ck] = @{} }
+              $clines = $classes[$ck]
               foreach ($root in $roots) {
                 if ($fn.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { $fn = $fn.Substring($root.Length); break }
               }
@@ -616,9 +623,11 @@ runs:
                     $ln.GetAttribute('condition-coverage') -match '\((\d+)/(\d+)\)') {
                   $bc = [int]$Matches[1]; $bv = [int]$Matches[2]
                 }
-                $p = $lines[$n]
-                if ($p) { $lines[$n] = @([math]::Max($p[0], $h), [math]::Max($p[1], $bc), [math]::Max($p[2], $bv)) }
-                else    { $lines[$n] = @($h, $bc, $bv) }
+                foreach ($set in @($lines, $clines)) {
+                  $p = $set[$n]
+                  if ($p) { $set[$n] = @([math]::Max($p[0], $h), [math]::Max($p[1], $bc), [math]::Max($p[2], $bv)) }
+                  else    { $set[$n] = @($h, $bc, $bv) }
+                }
               }
             }
           }
@@ -654,6 +663,60 @@ runs:
         $asm | ConvertTo-Json -Depth 3 -AsArray | Set-Content -Path $env:ASSEMBLIES_PATH -Encoding utf8
         $byFile | ConvertTo-Json -Depth 3 -Compress | Set-Content -Path $env:LINES_PATH -Encoding utf8
 
+        # The union written back out as one Cobertura report, so ReportGenerator
+        # renders it without merging and its pages carry the lines counted here.
+        function Rate($c, $v) { if ($v -gt 0) { ($c / $v).ToString('0.####', $inv) } else { '1' } }
+        $xs = [Xml.XmlWriterSettings]::new(); $xs.Indent = $true
+        $w  = [Xml.XmlWriter]::Create($env:MERGED_PATH, $xs)
+        try {
+          $w.WriteStartElement('coverage')
+          $w.WriteAttributeString('line-rate', (Rate $lc $lv)); $w.WriteAttributeString('branch-rate', (Rate $bc $bv))
+          $w.WriteAttributeString('version', '1.9'); $w.WriteAttributeString('timestamp', [string][DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+          $w.WriteAttributeString('lines-covered', [string]$lc); $w.WriteAttributeString('lines-valid', [string]$lv)
+          $w.WriteAttributeString('branches-covered', [string]$bc); $w.WriteAttributeString('branches-valid', [string]$bv)
+          $w.WriteStartElement('sources')
+          foreach ($root in $allRoots) { $w.WriteElementString('source', $root) }
+          $w.WriteEndElement()
+          $w.WriteStartElement('packages')
+          foreach ($pn in ($totals.Keys | Sort-Object)) {
+            $t = $totals[$pn]
+            $w.WriteStartElement('package')
+            $w.WriteAttributeString('name', $pn)
+            $w.WriteAttributeString('line-rate', (Rate $t[0] $t[1])); $w.WriteAttributeString('branch-rate', (Rate $t[2] $t[3]))
+            $w.WriteAttributeString('complexity', '0')
+            $w.WriteStartElement('classes')
+            foreach ($ck in ($classes.Keys | Where-Object { $_.StartsWith($pn + "`n") } | Sort-Object)) {
+              $null, $cn, $cf = $ck -split "`n", 3
+              $cl = $classes[$ck]
+              $c1 = 0; $v1 = 0; $c2 = 0; $v2 = 0
+              foreach ($v in $cl.Values) { $v1++; if ($v[0] -gt 0) { $c1++ }; $c2 += $v[1]; $v2 += $v[2] }
+              $w.WriteStartElement('class')
+              $w.WriteAttributeString('name', $cn); $w.WriteAttributeString('filename', $cf)
+              $w.WriteAttributeString('line-rate', (Rate $c1 $v1)); $w.WriteAttributeString('branch-rate', (Rate $c2 $v2))
+              $w.WriteAttributeString('complexity', '0')
+              $w.WriteStartElement('methods'); $w.WriteEndElement()
+              $w.WriteStartElement('lines')
+              foreach ($n in ($cl.Keys | Sort-Object)) {
+                $v = $cl[$n]
+                $w.WriteStartElement('line')
+                $w.WriteAttributeString('number', [string]$n); $w.WriteAttributeString('hits', [string]$v[0])
+                if ($v[2] -gt 0) {
+                  $w.WriteAttributeString('branch', 'True')
+                  $w.WriteAttributeString('condition-coverage', "$((Pct $v[1] $v[2]) -replace '\.0$', '')% ($($v[1])/$($v[2]))")
+                } else {
+                  $w.WriteAttributeString('branch', 'False')
+                }
+                $w.WriteEndElement()
+              }
+              $w.WriteEndElement(); $w.WriteEndElement()
+            }
+            $w.WriteEndElement(); $w.WriteEndElement()
+          }
+          $w.WriteEndElement(); $w.WriteEndElement()
+        } finally {
+          $w.Dispose()
+        }
+
         if ((Pct $lc $lv)) { "line_rate=$(Pct $lc $lv)"   | Add-Content -Path $env:GITHUB_OUTPUT }
         if ((Pct $bc $bv)) { "branch_rate=$(Pct $bc $bv)" | Add-Content -Path $env:GITHUB_OUTPUT }
         "measured=true" | Add-Content -Path $env:GITHUB_OUTPUT
@@ -661,19 +724,22 @@ runs:
         foreach ($a in $asm) { Write-Host "COVASM|$($a.Name)|$($a.Covered)/$($a.Coverable)" }
 
     # The browsable report, where a reviewer can see which lines are not
-    # covered. No figure on the page is read from it, and its per-class numbers
-    # can be higher than the summary's for the reason given above. Installed to
-    # a temporary tool path so nothing is written into the caller's .config.
+    # covered. It is given the single merged report written above and never the
+    # raw ones, because ReportGenerator's own merge is what adds the lines.
+    # Installed to a temporary tool path so nothing is written into the
+    # caller's .config.
     - name: Coverage report
       id: coverage_html
       if: always() && steps.coverage.outputs.measured == 'true'
       continue-on-error: true
       shell: pwsh
+      env:
+        MERGED_PATH: ${{ runner.temp }}/ci-unit-tests-merged.cobertura.xml
       run: |
         $tools = Join-Path $env:RUNNER_TEMP 'ci-unit-tests-tools'
         dotnet tool install dotnet-reportgenerator-globaltool --version 5.4.4 --tool-path $tools
         if ($LASTEXITCODE -ne 0) { throw "ReportGenerator could not be installed (exit $LASTEXITCODE)." }
-        & (Join-Path $tools 'reportgenerator') "-reports:TestResults/*/coverage.cobertura.xml" "-targetdir:CodeCoverage" "-reporttypes:Html"
+        & (Join-Path $tools 'reportgenerator') "-reports:$env:MERGED_PATH" "-targetdir:CodeCoverage" "-reporttypes:Html"
         if ($LASTEXITCODE -ne 0) { throw "ReportGenerator failed (exit $LASTEXITCODE)." }
         $files = @(Get-ChildItem CodeCoverage -Recurse -File -ErrorAction SilentlyContinue)
         Write-Host "COVREPORTSIZE|bytes=$(($files | Measure-Object Length -Sum).Sum)|files=$($files.Count)"
@@ -858,8 +924,15 @@ runs:
             # A results file with no result at all yields $null, and @($null) is
             # one element, not none, which would render as a blank test.
             $results = @($x.TestRun.Results.UnitTestResult | Where-Object { $_ })
+            # The fixture each result belongs to, so the full list can tell
+            # apart two tests that share a method name.
+            $fixture = @{}
+            foreach ($d in @($x.TestRun.TestDefinitions.UnitTest | Where-Object { $_ })) {
+              if ($d.TestMethod) { $fixture[$d.id] = $d.TestMethod.className }
+            }
             $projects += [pscustomobject]@{
               Name    = $name
+              Fixture = $fixture
               Results = $results
               Failed  = @($results | Where-Object { $_.outcome -eq 'Failed' })
               NotRun  = @($results | Where-Object { $_.outcome -ne 'Passed' -and $_.outcome -ne 'Failed' })
@@ -1130,7 +1203,8 @@ runs:
               [void]$all.AppendLine('|---|---|')
               foreach ($t in $p.Results) {
                 $o = switch ($t.outcome) { 'Passed' { 'Passed' } 'Failed' { 'Failed' } default { 'Not run' } }
-                [void]$all.AppendLine("| ``$($t.testName)`` | $o |")
+                $full = if ($p.Fixture[$t.testId]) { "$($p.Fixture[$t.testId]).$($t.testName)" } else { $t.testName }
+                [void]$all.AppendLine("| ``$full`` | $o |")
               }
               [void]$all.AppendLine('')
             }
