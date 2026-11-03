@@ -244,7 +244,7 @@ runs:
           $inc = ($own | ForEach-Object { '[' + $_ + ']*' }) -join ','
           $x  = '<RunSettings><DataCollectionRunSettings><DataCollectors>'
           $x += '<DataCollector friendlyName="XPlat code coverage"><Configuration>'
-          $x += '<Format>cobertura</Format><Include>' + $inc + '</Include>'
+          $x += '<Format>cobertura</Format>'   # PROBE ONLY: no Include, so coverlet's default selection applies
           $x += '</Configuration></DataCollector>'
           $x += '</DataCollectors></DataCollectionRunSettings></RunSettings>'
           Set-Content -Path $env:SETTINGS_PATH -Value $x -Encoding utf8 -ErrorAction Stop
