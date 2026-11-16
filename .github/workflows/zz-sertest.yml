@@ -103,7 +103,7 @@ jobs:
           Get-Pinned "BHoM/CI_Toolkit"    $env:CI_TOOLKIT_SHA    "C:\cit"
           Get-Pinned "BHoM/Versioning_Toolkit" $env:VERSIONING_TOOLKIT_SHA "C:\vt"
           git -C "C:\bhom-deps\BHoM_Engine" show --stat --format='%H %s' HEAD | Out-File out\engine-head.txt -Encoding utf8
-          git -C "C:\bhom-deps\BHoM_Engine" grep -n "m_UseLegacySerialisation =" -- Serialiser_Engine | Out-File out\toggle.txt -Encoding utf8
+          git -C "C:\bhom-deps\BHoM_Engine" grep -n "m_UseLegacySerialisation =" -- Serialiser_Engine | Out-File out\toggle.txt -Encoding utf8; if ($LASTEXITCODE -eq 1) { "toggle not present (git grep exit 1)" | Out-File out\toggle.txt -Encoding utf8; $global:LASTEXITCODE = 0 }
           Get-Content out\toggle.txt
           @("BHoM/BHoM", "BHoM/BHoM_Engine", "BHoM/BHoM_Adapter", "BHoM/Test_Toolkit") | Set-Content deps\_order.txt -Encoding utf8
           "" | Set-Content deps\_shas.txt
