@@ -1,0 +1,189 @@
+name: zz-sertest-3631
+
+# Scratch experiment, Sandbox only. Serialisation before/after BHoM_Engine #3631 and with the
+# writer toggle flipped. Every repository is cloned read-only at a pinned commit.
+
+on:
+  push:
+    branches: [probe/sertest-3631]
+  workflow_dispatch:
+    inputs:
+      only_job:
+        description: "Run one job only (A1, A2, B, C). Empty runs all four."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  BHOM_SHA: f7ba043c70decbe1037e7843840c5123c91e33ce
+  ADAPTER_SHA: 4ce149cc0ceca18bc2c098ed85b707805206eb52
+  TEST_TOOLKIT_SHA: 68c1f9ebf3e27827c3be3d81f903d20d0e386218
+  FILE_TOOLKIT_SHA: 76a2b4ae422bc1ada3c68b5b09370107dd00df2a
+  CI_TOOLKIT_SHA: 38bc7fca1f05f1a366f5b26cf4c28ed4897c79e8
+  VERSIONING_TOOLKIT_SHA: 4fb0d4e0ed52e29bb293da1de929136d0f4d59ed
+  DOTNET_VERSION: "10.0"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - id: m
+        shell: bash
+        env:
+          ONLY: ${{ inputs.only_job }}
+        run: |
+          all='[
+            {"id":"A1","engine_repo":"BHoM/BHoM_Engine","engine_sha":"182d37161fbd28d733331c89b2da033a21e6bf9d","runner_passes":2},
+            {"id":"A2","engine_repo":"BHoM/BHoM_Engine","engine_sha":"182d37161fbd28d733331c89b2da033a21e6bf9d","runner_passes":1},
+            {"id":"B","engine_repo":"BHoM/BHoM_Engine","engine_sha":"b5984c7a8a4209005f53b06341e214095bb0afbe","runner_passes":1},
+            {"id":"C","engine_repo":"BuroHappoldEngineeringSandbox/BHoM_Engine","engine_sha":"488608569e2ea3a1acb62aa1e145684a1472393b","runner_passes":1}
+          ]'
+          sel=$(jq -c --arg only "$ONLY" '{include: [ .[] | select($only == "" or .id == $only) ]}' <<< "$all")
+          echo "$sel"
+          echo "matrix=$sel" >> "$GITHUB_OUTPUT"
+
+  sertest:
+    name: ${{ matrix.id }}
+    needs: plan
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Checkout harness
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: harness
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Prepare folders (as resolve-dependencies)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path deps, out | Out-Null
+          New-Item -ItemType Directory -Force -Path "C:\bhom-deps" | Out-Null
+          $sdk = "$env:DOTNET_VERSION"; if ($sdk -match '^\d+\.\d+$') { $sdk = "$sdk.0" }
+          [ordered]@{ sdk = [ordered]@{ version = $sdk; rollForward = "latestMinor" } } |
+            ConvertTo-Json | Set-Content "C:\bhom-deps\global.json" -Encoding utf8
+          foreach ($d in "Assemblies", "Upgrades") {
+            $p = "$env:ProgramData\BHoM\$d"
+            if (Test-Path $p) { Remove-Item $p -Recurse -Force }
+            New-Item -ItemType Directory -Force -Path $p | Out-Null
+          }
+
+      - name: Clone pinned repositories
+        shell: pwsh
+        env:
+          ENGINE_REPO: ${{ matrix.engine_repo }}
+          ENGINE_SHA: ${{ matrix.engine_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Get-Pinned($repo, $sha, $dest) {
+            git clone --quiet --filter=blob:none --no-checkout "https://github.com/$repo.git" $dest
+            if ($LASTEXITCODE -ne 0) { throw "clone failed: $repo" }
+            git -C $dest checkout --quiet $sha
+            if ($LASTEXITCODE -ne 0) { throw "checkout failed: $repo@$sha" }
+            $head = git -C $dest rev-parse HEAD
+            if ($head -ne $sha) { throw "pin mismatch for $repo : $head != $sha" }
+            "$repo`t$head" | Out-File out\pins.tsv -Append -Encoding utf8
+          }
+          Get-Pinned "BHoM/BHoM"          $env:BHOM_SHA          "C:\bhom-deps\BHoM"
+          Get-Pinned $env:ENGINE_REPO     $env:ENGINE_SHA        "C:\bhom-deps\BHoM_Engine"
+          Get-Pinned "BHoM/BHoM_Adapter"  $env:ADAPTER_SHA       "C:\bhom-deps\BHoM_Adapter"
+          Get-Pinned "BHoM/Test_Toolkit"  $env:TEST_TOOLKIT_SHA  "C:\bhom-deps\Test_Toolkit"
+          Get-Pinned "BHoM/File_Toolkit"  $env:FILE_TOOLKIT_SHA  "File_Toolkit"
+          Get-Pinned "BHoM/CI_Toolkit"    $env:CI_TOOLKIT_SHA    "C:\cit"
+          Get-Pinned "BHoM/Versioning_Toolkit" $env:VERSIONING_TOOLKIT_SHA "C:\vt"
+          git -C "C:\bhom-deps\BHoM_Engine" show --stat --format='%H %s' HEAD | Out-File out\engine-head.txt -Encoding utf8
+          git -C "C:\bhom-deps\BHoM_Engine" grep -n "m_UseLegacySerialisation =" -- Serialiser_Engine | Out-File out\toggle.txt -Encoding utf8
+          Get-Content out\toggle.txt
+          @("BHoM/BHoM", "BHoM/BHoM_Engine", "BHoM/BHoM_Adapter", "BHoM/Test_Toolkit") | Set-Content deps\_order.txt -Encoding utf8
+          "" | Set-Content deps\_shas.txt
+          Get-Content out\pins.tsv
+
+      - name: Build dependencies (CI_Toolkit Build-Dependencies.ps1)
+        shell: pwsh
+        run: |
+          & "C:\cit\.github\actions\resolve-dependencies\scripts\Build-Dependencies.ps1" -Configuration Release -CloneRoot "C:\bhom-deps"
+
+      - name: Build caller (File_Toolkit, as ci-serialisation primary build)
+        shell: pwsh
+        run: |
+          dotnet restore "File_Toolkit\File_Toolkit.sln"
+          dotnet build "File_Toolkit\File_Toolkit.sln" --no-restore -c Release --nologo -m -clp:ErrorsOnly
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Verification.sln (as ci-serialisation)
+        shell: pwsh
+        run: |
+          $sln = "C:\bhom-deps\BHoM_Engine\.ci\code\Verification.sln"
+          $content = Get-Content $sln -Raw
+          $cfg = if ($content -match '\bRelease\|Any CPU\b') { 'Release' } else {
+            $m = [regex]::Matches($content, 'Release\w+(?=\|Any CPU)'); if ($m.Count -gt 0) { $m[0].Value } else { 'Release' } }
+          Write-Host "Verification config: $cfg"
+          dotnet restore $sln
+          dotnet build $sln --no-restore -c $cfg --nologo -clp:ErrorsOnly
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem "$env:ProgramData\BHoM\Assemblies" -Filter *.dll | Sort-Object Name |
+            ForEach-Object { "{0}`t{1}" -f $_.Name, (Get-FileHash $_.FullName -Algorithm SHA256).Hash } |
+            Out-File out\assemblies.tsv -Encoding utf8
+
+      - name: Publish SerialiserRunner and SerProbe
+        shell: pwsh
+        run: |
+          dotnet publish "C:\cit\tools\SerialiserRunner\src\SerialiserRunner\SerialiserRunner.csproj" -c Release -o "C:\sr"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet publish "harness\probe\SerProbe\SerProbe.csproj" -c Release -o "C:\probe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run SerialiserRunner
+        shell: pwsh
+        env:
+          PASSES: ${{ matrix.runner_passes }}
+        run: |
+          for ($i = 1; $i -le [int]$env:PASSES; $i++) {
+            & "C:\sr\SerialiserRunner.exe" run --assemblies "$env:ProgramData\BHoM\Assemblies" --output "out\runner-pass$i.json" *> "out\runner-pass$i.log"
+            "pass $i exit $LASTEXITCODE" | Tee-Object -FilePath out\runner-exit.txt -Append
+            Get-Content "out\runner-pass$i.log" -Tail 8
+          }
+          exit 0
+
+      - name: SerProbe legs
+        shell: pwsh
+        run: |
+          & "C:\probe\SerProbe.exe" legs "$env:ProgramData\BHoM\Assemblies" "out\probe-legs.json" *> out\probe-legs.log
+          "legs exit $LASTEXITCODE" | Tee-Object -FilePath out\probe-exit.txt -Append
+          Get-Content out\probe-legs.log -Tail 8
+          exit 0
+
+      - name: SerProbe capture and forced failure
+        shell: pwsh
+        run: |
+          & "C:\probe\SerProbe.exe" capture "$env:ProgramData\BHoM\Assemblies" "out\capture" *> out\probe-capture.log
+          "capture exit $LASTEXITCODE" | Tee-Object -FilePath out\probe-exit.txt -Append
+          Get-Content out\probe-capture.log -Tail 20
+          exit 0
+
+      - name: SerProbe read 9.3 Methods.json (information only)
+        shell: pwsh
+        run: |
+          & "C:\probe\SerProbe.exe" read93 "$env:ProgramData\BHoM\Assemblies" "C:\vt\.ci\code\Versioning_Test\Datasets\9.3\Methods.json" "out\read93.json" *> out\probe-read93.log
+          "read93 exit $LASTEXITCODE" | Tee-Object -FilePath out\probe-exit.txt -Append
+          Get-Content out\probe-read93.log -Tail 5
+          exit 0
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sertest-${{ matrix.id }}
+          path: out
+          retention-days: 14
